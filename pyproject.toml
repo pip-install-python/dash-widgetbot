@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dash-widgetbot"
+version = "0.1.0"
+description = "Dash hooks plugin for WidgetBot Discord embeds"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Pip Install Python LLC", email = "pip@pip-install-python.com" }
+]
+keywords = ["dash", "discord", "widgetbot", "chat", "embed", "hooks", "plotly"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Dash",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = ["dash>=3.0.3"]
+
+[project.optional-dependencies]
+bot = ["requests>=2.31.0", "PyNaCl>=1.5.0"]
+ai  = ["google-generativeai>=0.8.0"]
+all = ["requests>=2.31.0", "PyNaCl>=1.5.0", "google-generativeai>=0.8.0"]
+
+[project.urls]
+Homepage   = "https://pip-install-python.com/pip/dash_widgetbot"
+Repository = "https://github.com/pip-install-python/dash-widgetbot"
+Changelog  = "https://github.com/pip-install-python/dash-widgetbot/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+packages = ["dash_widgetbot"]

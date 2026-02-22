@@ -1,0 +1,34 @@
+/* dash-widgetbot example app styles */
+
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Code blocks */
+pre.code-block {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    border-radius: 8px;
+    padding: 16px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+/* Event log */
+.event-log {
+    max-height: 300px;
+    overflow-y: auto;
+    background: #1e1e2e;
+    color: #a6adc8;
+    border-radius: 8px;
+    padding: 12px;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.event-log-entry {
+    padding: 4px 0;
+    border-bottom: 1px solid #313244;
+}
