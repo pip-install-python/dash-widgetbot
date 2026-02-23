@@ -149,7 +149,9 @@ function(config) {
     crate.on('sentMessage', function(data) {
         window.dash_clientside.set_props(sid.event, {data: {
             type: 'sentMessage', content: data.content || '',
-            channel: data.channel || '', timestamp: Date.now(), _ts: Date.now()
+            channel_id: data.channel ? (data.channel.id || '') : '',
+            channel_name: data.channel ? (data.channel.name || '') : '',
+            timestamp: Date.now(), _ts: Date.now()
         }});
     });
 

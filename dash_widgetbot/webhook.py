@@ -5,22 +5,26 @@ import time
 
 import requests
 
+from ._constants import IS_COMPONENTS_V2
+
 
 def send_webhook_message(
-    content,
+    content=None,
     *,
     webhook_url=None,
     username=None,
     avatar_url=None,
     thread_id=None,
     embed=None,
+    components=None,
+    flags=None,
 ):
     """POST a message to a Discord webhook.
 
     Parameters
     ----------
-    content : str
-        Message text.
+    content : str, optional
+        Message text.  Can be ``None`` when sending a Components V2 message.
     webhook_url : str, optional
         Full webhook URL. Falls back to ``DISCORD_WEBHOOK_URL`` env var.
     username : str, optional
@@ -31,6 +35,12 @@ def send_webhook_message(
         Send into a specific thread.
     embed : dict, optional
         A single Discord embed object.
+    components : list[dict], optional
+        Top-level message components (Components V2).  When provided the
+        ``IS_COMPONENTS_V2`` flag is automatically set.
+    flags : int, optional
+        Message flags.  ``IS_COMPONENTS_V2`` (32768) is OR-ed in automatically
+        when *components* is provided.
 
     Returns
     -------
@@ -47,15 +57,26 @@ def send_webhook_message(
             "_ts": time.time(),
         }
 
-    payload = {"content": content}
+    payload = {}
+    if content is not None:
+        payload["content"] = content
     if username:
         payload["username"] = username
     if avatar_url:
         payload["avatar_url"] = avatar_url
     if embed:
         payload["embeds"] = [embed]
+    if components is not None:
+        payload["components"] = components
+        # Auto-set IS_COMPONENTS_V2 flag
+        payload["flags"] = (flags or 0) | IS_COMPONENTS_V2
+    elif flags is not None:
+        payload["flags"] = flags
 
     params = {"wait": "true"}
+    if components is not None:
+        # Required query param for Components V2 via webhooks
+        params["with_components"] = "true"
     if thread_id:
         params["thread_id"] = thread_id
 

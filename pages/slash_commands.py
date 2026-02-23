@@ -1,10 +1,17 @@
-"""Slash Commands page -- interactions endpoint setup guide."""
+"""Slash Commands page -- setup guide + interactive /ask testing."""
 
+import json
 import os
+import time
 
 import dash
-from dash import html
+from dash import html, callback, Input, Output, State, dcc, no_update
 import dash_mantine_components as dmc
+
+from dash_widgetbot.ai_builder import build_components_v2, DC_BG
+from dash_widgetbot.ai_responder import generate_structured_response
+from dash_widgetbot.interactions import sync_discord_endpoint, _detect_ngrok_url
+from dash_widgetbot.preview import render_discord_preview
 
 dash.register_page(
     __name__, path="/slash-commands", title="Slash Commands", name="Slash Commands"
@@ -55,6 +62,17 @@ curl -X PUT \\
       "name": "status",
       "description": "Show app status info",
       "type": 1
+    }},
+    {{
+      "name": "gen",
+      "description": "Generate a rich Dash UI component from a prompt",
+      "type": 1,
+      "options": [{{
+        "name": "prompt",
+        "description": "What to generate (article, code, table, image, or tip)",
+        "type": 3,
+        "required": true
+      }}]
     }}
   ]'
 """
@@ -93,6 +111,8 @@ STEPS = [
 
 layout = dmc.Container(
     [
+        dcc.Store(id="sc-test-payload", data=None),
+
         dmc.Space(h="xl"),
         dmc.Title("Slash Commands", order=2, mb="md"),
         dmc.Text(
@@ -135,11 +155,8 @@ layout = dmc.Container(
                     [
                         dmc.GridCol(
                             [
-                                dmc.Text("Interactions URL", size="sm", fw=600),
-                                dmc.Code(
-                                    "https://<your-domain>/api/discord/interactions",
-                                    block=True,
-                                ),
+                                dmc.Text("Discord Endpoint URL", size="sm", fw=600),
+                                html.Div(id="sc-endpoint-url"),
                             ],
                             span=12,
                         ),
@@ -167,10 +184,21 @@ layout = dmc.Container(
                     ],
                     mb="md",
                 ),
-                dmc.Badge(
-                    "Ready" if (APP_ID and PUBLIC_KEY and BOT_TOKEN) else "Not Configured",
-                    color="green" if (APP_ID and PUBLIC_KEY and BOT_TOKEN) else "yellow",
-                ),
+                dmc.Group([
+                    dmc.Badge(
+                        "Ready" if (APP_ID and PUBLIC_KEY and BOT_TOKEN) else "Not Configured",
+                        color="green" if (APP_ID and PUBLIC_KEY and BOT_TOKEN) else "yellow",
+                    ),
+                    dmc.Button(
+                        "Sync Endpoint with ngrok",
+                        id="sc-sync-endpoint-btn",
+                        size="xs",
+                        variant="light",
+                        color="violet",
+                        loading=False,
+                    ),
+                ], gap="sm"),
+                html.Div(id="sc-sync-endpoint-result", style={"marginTop": "8px"}),
             ],
             p="lg",
             withBorder=True,
@@ -221,8 +249,122 @@ layout = dmc.Container(
                                 ),
                             ]
                         ),
+                        dmc.ListItem(
+                            [
+                                dmc.Code("/gen <prompt>"),
+                                dmc.Text(
+                                    " -- Generates a rich Dash component (article, code, table, image, or callout)",
+                                    size="sm",
+                                    span=True,
+                                ),
+                            ]
+                        ),
                     ],
                     size="sm",
+                ),
+            ],
+            p="lg",
+            withBorder=True,
+            mb="md",
+        ),
+
+        # ── Test /ask Locally ─────────────────────────────────────────
+        dmc.Paper(
+            [
+                dmc.Title("Test /ask Locally", order=4, mb="xs"),
+                dmc.Text(
+                    "Run the full AI pipeline locally: generate a structured response, "
+                    "preview the Components V2 output, and optionally send it to Discord.",
+                    size="sm",
+                    c="dimmed",
+                    mb="md",
+                ),
+                # Input row
+                dmc.Group(
+                    [
+                        dmc.TextInput(
+                            id="sc-test-input",
+                            placeholder="Type a question (e.g. What is Python?)",
+                            style={"flex": 1},
+                        ),
+                        dmc.Button(
+                            "Run /ask",
+                            id="sc-test-btn",
+                            color="indigo",
+                            loading=False,
+                        ),
+                    ],
+                    mb="md",
+                ),
+                # Timing badge
+                html.Div(id="sc-test-timing", style={"marginBottom": "12px"}),
+
+                dmc.Grid(
+                    [
+                        # Discord preview
+                        dmc.GridCol(
+                            [
+                                dmc.Text("Discord Preview", fw=600, size="sm", mb="xs"),
+                                dmc.Paper(
+                                    dcc.Loading(
+                                        html.Div(
+                                            id="sc-discord-preview",
+                                            children=dmc.Text(
+                                                "Run /ask to see a preview",
+                                                c="#72767D", size="sm", ta="center", py="xl",
+                                            ),
+                                        ),
+                                        custom_spinner=dmc.Skeleton(visible=True, h="200px"),
+                                        target_components={"sc-discord-preview": "children"},
+                                    ),
+                                    p="md",
+                                    style={
+                                        "background": DC_BG,
+                                        "minHeight": "200px",
+                                        "borderRadius": "8px",
+                                    },
+                                ),
+                            ],
+                            span=6,
+                        ),
+                        # JSON payload viewer
+                        dmc.GridCol(
+                            [
+                                dmc.Group(
+                                    [
+                                        dmc.Text("JSON Payload", fw=600, size="sm"),
+                                        dmc.Button(
+                                            "Send to Discord",
+                                            id="sc-send-discord-btn",
+                                            size="xs",
+                                            variant="light",
+                                            color="indigo",
+                                            loading=False,
+                                        ),
+                                    ],
+                                    justify="space-between",
+                                    mb="xs",
+                                ),
+                                html.Div(id="sc-send-discord-result"),
+                                dmc.Paper(
+                                    dmc.Code(
+                                        id="sc-json-viewer",
+                                        children="// Run /ask to see the payload",
+                                        block=True,
+                                    ),
+                                    p="md",
+                                    style={
+                                        "background": "#1E1F22",
+                                        "maxHeight": "300px",
+                                        "overflowY": "auto",
+                                        "borderRadius": "8px",
+                                    },
+                                ),
+                            ],
+                            span=6,
+                        ),
+                    ],
+                    gutter="xl",
                 ),
             ],
             p="lg",
@@ -233,3 +375,141 @@ layout = dmc.Container(
     size="lg",
     py="xl",
 )
+
+
+# ---------------------------------------------------------------------------
+# Callbacks
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("sc-endpoint-url", "children"),
+    Input("sc-sync-endpoint-result", "children"),  # refresh after sync
+    prevent_initial_call=False,
+)
+def show_endpoint_url(_sync_result):
+    """Fetch and display the current Discord Interactions Endpoint URL."""
+    import requests as _req
+    token = os.getenv("DISCORD_BOT_TOKEN", "")
+    if not token:
+        return dmc.Code("(DISCORD_BOT_TOKEN not set)", block=True)
+    try:
+        resp = _req.get(
+            "https://discord.com/api/v10/applications/@me",
+            headers={"Authorization": f"Bot {token}"},
+            timeout=10,
+        )
+        if resp.ok:
+            url = resp.json().get("interactions_endpoint_url") or "(not set)"
+            ngrok_url = _detect_ngrok_url()
+            children = [dmc.Code(url, block=True)]
+            if ngrok_url and ngrok_url not in url:
+                children.append(
+                    dmc.Text(
+                        f"ngrok detected at {ngrok_url} but endpoint doesn't match!",
+                        c="red", size="xs", mt="xs",
+                    )
+                )
+            elif ngrok_url and ngrok_url in url:
+                children.append(
+                    dmc.Text("ngrok tunnel active and in sync", c="teal", size="xs", mt="xs")
+                )
+            return html.Div(children)
+        return dmc.Code(f"API error: {resp.status_code}", block=True)
+    except Exception as exc:
+        return dmc.Code(f"Error: {exc}", block=True)
+
+
+@callback(
+    Output("sc-sync-endpoint-result", "children"),
+    Input("sc-sync-endpoint-btn", "n_clicks"),
+    running=[(Output("sc-sync-endpoint-btn", "loading"), True, False)],
+    prevent_initial_call=True,
+)
+def sync_endpoint(_n):
+    """Sync the Discord endpoint with the current ngrok tunnel."""
+    result = sync_discord_endpoint()
+    if result["success"]:
+        return dmc.Badge(
+            f"Synced: {result['endpoint_url']}",
+            color="green", variant="light", size="sm",
+        )
+    return dmc.Badge(
+        f"Failed: {result['error'][:80]}",
+        color="red", variant="light", size="sm",
+    )
+
+
+@callback(
+    Output("sc-discord-preview", "children"),
+    Output("sc-json-viewer", "children"),
+    Output("sc-test-payload", "data"),
+    Output("sc-test-timing", "children"),
+    Input("sc-test-btn", "n_clicks"),
+    State("sc-test-input", "value"),
+    running=[(Output("sc-test-btn", "loading"), True, False)],
+    prevent_initial_call=True,
+)
+def run_ask_test(_n, question):
+    if not question:
+        return no_update, no_update, no_update, dmc.Badge(
+            "Enter a question first", color="yellow", variant="light", size="sm",
+        )
+
+    t0 = time.time()
+    result = generate_structured_response(question)
+    elapsed = time.time() - t0
+
+    ai_response = result.get("response")
+    error = result.get("error")
+
+    if error or ai_response is None:
+        error_text = error or "Unknown error"
+        return (
+            dmc.Alert(error_text, color="red", variant="light"),
+            f"// Error: {error_text}",
+            None,
+            dmc.Badge(
+                f"Error ({elapsed:.1f}s)", color="red", variant="light", size="sm",
+            ),
+        )
+
+    # Build Components V2 payload
+    payload = build_components_v2(ai_response)
+    json_str = json.dumps(payload, indent=2)
+
+    # Discord preview
+    preview = render_discord_preview(ai_response)
+
+    timing = dmc.Badge(
+        f"Generated in {elapsed:.1f}s", color="teal", variant="light", size="sm",
+    )
+
+    return preview, json_str, payload, timing
+
+
+@callback(
+    Output("sc-send-discord-result", "children"),
+    Input("sc-send-discord-btn", "n_clicks"),
+    State("sc-test-payload", "data"),
+    running=[(Output("sc-send-discord-btn", "loading"), True, False)],
+    prevent_initial_call=True,
+)
+def send_to_discord(_n, payload):
+    if not payload or "components" not in payload:
+        return dmc.Badge(
+            "No payload to send", color="yellow", variant="light", size="sm",
+        )
+
+    from dash_widgetbot.webhook import send_webhook_message
+
+    result = send_webhook_message(components=payload["components"])
+
+    if result["success"]:
+        return dmc.Badge(
+            f"Sent (ID: {result['message_id']})",
+            color="green", variant="light", size="sm",
+        )
+    return dmc.Badge(
+        f"Failed: {result['error'][:80]}",
+        color="red", variant="light", size="sm",
+    )
