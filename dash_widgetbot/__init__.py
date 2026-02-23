@@ -1,6 +1,6 @@
 """dash-widgetbot -- Dash hooks plugin for WidgetBot Discord embeds."""
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"
 
 from .crate import add_discord_crate
 from .widget import add_discord_widget, discord_widget_container
@@ -16,8 +16,17 @@ from ._bridge import (
     crate_logout,
     crate_set_color,
     crate_emit,
+    emit_command,
+    emit_progress,
 )
-from ._constants import get_crate_store_ids, get_widget_store_ids
+from .progress import ProgressTracker, ProgressEvent
+from ._constants import (
+    get_crate_store_ids,
+    get_widget_store_ids,
+    SIO_NAMESPACE_CRATE,
+    SIO_NAMESPACE_GEN,
+)
+from ._transport import configure_socketio, is_socketio_available
 from .action_parser import parse_actions, strip_actions, ACTION_PARSER_JS
 
 # Optional: bot integration (requires requests + PyNaCl)
@@ -188,9 +197,17 @@ __all__ = [
     "crate_logout",
     "crate_set_color",
     "crate_emit",
+    "emit_command",
+    "emit_progress",
+    "ProgressTracker",
+    "ProgressEvent",
     "get_crate_store_ids",
     "get_widget_store_ids",
     "STORE_IDS",
+    "SIO_NAMESPACE_CRATE",
+    "SIO_NAMESPACE_GEN",
+    "configure_socketio",
+    "is_socketio_available",
     "parse_actions",
     "strip_actions",
     "ACTION_PARSER_JS",

@@ -104,6 +104,30 @@ def _delete_channel_message(channel_id: str, message_id: str) -> None:
         print(f"[dash-widgetbot] Loading message delete exception: {exc}")
 
 
+def _edit_channel_message(channel_id: str, message_id: str, content: str) -> bool:
+    """Edit an existing channel message. Returns True on success."""
+    bot_token = os.getenv("DISCORD_BOT_TOKEN", "")
+    if not bot_token or not channel_id or not message_id:
+        return False
+    try:
+        resp = requests.patch(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}",
+            headers={
+                "Authorization": f"Bot {bot_token}",
+                "Content-Type": "application/json",
+            },
+            json={"content": content},
+            timeout=10,
+        )
+        return resp.ok
+    except Exception as exc:
+        print(f"[dash-widgetbot] Edit channel message failed: {exc}")
+        return False
+
+
+_AI_COMMANDS = frozenset({"ai", "gen", "ask"})
+
+
 def sync_discord_endpoint(*, base_url=None, bot_token=None, application_id=None):
     """Detect the current public URL and update Discord's Interactions Endpoint.
 
@@ -449,6 +473,16 @@ def _handle_command(interaction, application_id):
         _send_followup(application_id, token, f"Unknown command: `/{name}`")
         return
 
+    # Inject progress tracker for AI commands
+    tracker = None
+    if name in _AI_COMMANDS:
+        from .progress import ProgressTracker, EphemeralSink, SocketIOSink
+        sinks = [SocketIOSink()]
+        if name in _ephemeral_commands:
+            sinks.append(EphemeralSink(application_id, token))
+        tracker = ProgressTracker(sinks=sinks)
+        interaction["_progress_tracker"] = tracker
+
     try:
         result = handler(interaction)
         # Check for modal response
@@ -472,6 +506,9 @@ def _handle_command(interaction, application_id):
         import traceback
         traceback.print_exc()
         _send_followup(application_id, token, f"Error: {exc}")
+    finally:
+        if tracker:
+            tracker.close()
 
 
 def _handle_component(interaction, application_id):

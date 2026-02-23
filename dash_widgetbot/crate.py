@@ -19,6 +19,7 @@ function(config) {
 
     var prefix = config._prefix || '';
     var crateKey = '_dashWidgetBotCrate' + (prefix ? '_' + prefix : '');
+    var _wbCrateSockKey = '_wbCrateSocket' + (prefix ? '_' + prefix : '');
 
     // Guard double-init
     if (window[crateKey]) return window.dash_clientside.no_update;
@@ -104,14 +105,14 @@ function(config) {
 
     // Wire events ---------------------------------------------------------
     crate.on('ready', function() {
-        window.dash_clientside.set_props(sid.status, {
-            data: {initialized: true, open: false, _ts: Date.now()}
-        });
+        var payload = {initialized: true, open: false, _ts: Date.now()};
+        window.dash_clientside.set_props(sid.status, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', {type: 'ready', data: payload});
     });
 
     crate.on('message', function(data) {
         var msg = data && data.message ? data.message : (data || {});
-        window.dash_clientside.set_props(sid.message, {data: {
+        var payload = {
             content: msg.content || '',
             author: msg.author ? {
                 username: msg.author.username || '',
@@ -121,83 +122,126 @@ function(config) {
             channel: data && data.channel ? (data.channel.name || '') : '',
             channel_id: data && data.channel ? (data.channel.id || '') : '',
             timestamp: Date.now(), _ts: Date.now()
-        }});
+        };
+        window.dash_clientside.set_props(sid.message, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_message', payload);
     });
 
     crate.on('signIn', function(user) {
-        window.dash_clientside.set_props(sid.user, {data: {
+        var payload = {
             username: user.username || '', id: user.id || '',
             avatar: user.avatarUrl || '', provider: user.provider || '',
             signed_in: true, _ts: Date.now()
-        }});
+        };
+        window.dash_clientside.set_props(sid.user, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', {type: 'signIn', data: payload});
     });
 
     crate.on('alreadySignedIn', function(user) {
-        window.dash_clientside.set_props(sid.user, {data: {
+        var payload = {
             username: user.username || '', id: user.id || '',
             avatar: user.avatarUrl || '', provider: user.provider || '',
             signed_in: true, _ts: Date.now()
-        }});
+        };
+        window.dash_clientside.set_props(sid.user, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', {type: 'alreadySignedIn', data: payload});
     });
 
     crate.on('signOut', function() {
-        window.dash_clientside.set_props(sid.user, {
-            data: {signed_in: false, _ts: Date.now()}
-        });
+        var payload = {signed_in: false, _ts: Date.now()};
+        window.dash_clientside.set_props(sid.user, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', {type: 'signOut', data: payload});
     });
 
     crate.on('sentMessage', function(data) {
-        window.dash_clientside.set_props(sid.event, {data: {
+        var payload = {
             type: 'sentMessage', content: data.content || '',
             channel_id: data.channel ? (data.channel.id || '') : '',
             channel_name: data.channel ? (data.channel.name || '') : '',
             timestamp: Date.now(), _ts: Date.now()
-        }});
+        };
+        window.dash_clientside.set_props(sid.event, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', payload);
     });
 
     crate.on('messageDelete', function(data) {
-        window.dash_clientside.set_props(sid.event, {data: {
+        var payload = {
             type: 'messageDelete', message_id: data.id || '',
             channel: data.channel ? (data.channel.id || '') : '',
             timestamp: Date.now(), _ts: Date.now()
-        }});
+        };
+        window.dash_clientside.set_props(sid.event, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', payload);
     });
 
     crate.on('messageDeleteBulk', function(data) {
-        window.dash_clientside.set_props(sid.event, {data: {
+        var payload = {
             type: 'messageDeleteBulk', ids: data.ids || [],
             channel: data.channel ? (data.channel.id || '') : '',
             timestamp: Date.now(), _ts: Date.now()
-        }});
+        };
+        window.dash_clientside.set_props(sid.event, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', payload);
     });
 
     crate.on('messageUpdate', function(data) {
-        window.dash_clientside.set_props(sid.event, {data: {
+        var payload = {
             type: 'messageUpdate', message: data.message || {},
             channel: data.channel ? (data.channel.id || '') : '',
             timestamp: Date.now(), _ts: Date.now()
-        }});
+        };
+        window.dash_clientside.set_props(sid.event, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', payload);
     });
 
     crate.on('unreadCountUpdate', function(data) {
-        window.dash_clientside.set_props(sid.event, {data: {
+        var payload = {
             type: 'unreadCountUpdate', count: data.count || 0,
             timestamp: Date.now(), _ts: Date.now()
-        }});
+        };
+        window.dash_clientside.set_props(sid.event, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', payload);
     });
 
     crate.on('directMessage', function(data) {
-        window.dash_clientside.set_props(sid.event, {data: {
+        var payload = {
             type: 'directMessage', message: data.message || {},
             timestamp: Date.now(), _ts: Date.now()
-        }});
+        };
+        window.dash_clientside.set_props(sid.event, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', payload);
     });
 
     crate.on('loginRequested', function() {
-        window.dash_clientside.set_props(sid.event, {data: {
-            type: 'loginRequested', timestamp: Date.now(), _ts: Date.now()
-        }});
+        var payload = {type: 'loginRequested', timestamp: Date.now(), _ts: Date.now()};
+        window.dash_clientside.set_props(sid.event, {data: payload});
+        if (window[_wbCrateSockKey]) window[_wbCrateSockKey].emit('crate_event', payload);
     });
+
+    // ── Socket.IO dual-path (only when socket.io client is loaded) ──
+    if (typeof io !== 'undefined') {
+        var _wbSio = io(window.location.origin + '/widgetbot-crate', {
+            transports: ['websocket', 'polling']
+        });
+        window[_wbCrateSockKey] = _wbSio;
+
+        // Receive server-pushed crate commands (same dispatch as _DISPATCH_JS)
+        _wbSio.on('crate_command', function(cmd) {
+            var c = window[crateKey];
+            if (!c) return;
+            if (cmd.action === 'toggle') c.toggle();
+            if (cmd.action === 'notify') c.notify(cmd.data || cmd.content || '');
+            if (cmd.action === 'navigate') c.navigate(cmd.data || {});
+            if (cmd.action === 'hide') c.hide();
+            if (cmd.action === 'show') c.show();
+            if (cmd.action === 'update_options') c.setOptions(cmd.data || {});
+            if (cmd.action === 'send_message') c.emit('sendMessage', cmd.data);
+            if (cmd.action === 'login') c.emit('login');
+            if (cmd.action === 'logout') c.emit('logout');
+            if (cmd.action === 'color' && cmd.data && Array.isArray(cmd.data)) c.emit('color', cmd.data);
+            if (cmd.action === 'emit') c.emit(cmd.event, cmd.data);
+        });
+    }
 
     return window.dash_clientside.no_update;
 }

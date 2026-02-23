@@ -66,6 +66,21 @@ class GenStore:
             self._entries.append(entry)
             if len(self._entries) > self._max:
                 self._entries = self._entries[-self._max:]
+        # Emit via Socket.IO if configured (outside lock to prevent deadlock)
+        from ._transport import is_socketio_available, get_socketio
+        if is_socketio_available():
+            from ._constants import SIO_NAMESPACE_GEN, SIO_EVENT_GEN_RESULT
+            payload = {
+                "id": entry.id,
+                "prompt": entry.prompt,
+                "discord_user": entry.discord_user,
+                "timestamp": entry.timestamp,
+                "error": entry.error,
+                "has_image": entry.image_bytes is not None,
+                "image_mime": entry.image_mime,
+                "response": entry.response.model_dump() if entry.response else None,
+            }
+            get_socketio().emit(SIO_EVENT_GEN_RESULT, payload, namespace=SIO_NAMESPACE_GEN)
 
     def get_since(self, cursor: int) -> list[GenEntry]:
         """Return entries added after position *cursor*."""

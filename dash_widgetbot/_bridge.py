@@ -80,3 +80,35 @@ def crate_set_color(variable, value, prefix=""):
 def crate_emit(event, data=None, prefix=""):
     """Send a raw embed-api command."""
     return {"action": "emit", "event": event, "data": data, "_ts": time.time(), "_prefix": prefix}
+
+
+def emit_command(command_dict, namespace=None):
+    """Emit a crate command via Socket.IO if available. Returns True if emitted.
+
+    Server-side use only (background threads, webhook handlers).
+    Client-side commands still flow through dcc.Store.
+    """
+    from ._transport import is_socketio_available, get_socketio
+    from ._constants import SIO_NAMESPACE_CRATE, SIO_EVENT_CRATE_COMMAND
+    if not is_socketio_available():
+        return False
+    get_socketio().emit(
+        SIO_EVENT_CRATE_COMMAND,
+        command_dict,
+        namespace=namespace or SIO_NAMESPACE_CRATE,
+    )
+    return True
+
+
+def emit_progress(event_dict, namespace=None):
+    """Emit a gen_progress event via Socket.IO. Returns True if emitted."""
+    from ._transport import is_socketio_available, get_socketio
+    from ._constants import SIO_NAMESPACE_GEN, SIO_EVENT_GEN_PROGRESS
+    if not is_socketio_available():
+        return False
+    get_socketio().emit(
+        SIO_EVENT_GEN_PROGRESS,
+        event_dict,
+        namespace=namespace or SIO_NAMESPACE_GEN,
+    )
+    return True

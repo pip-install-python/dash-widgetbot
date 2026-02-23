@@ -79,3 +79,19 @@ TEXT_INPUT_STYLES = {
 
 # Message flag for Components V2 payloads
 IS_COMPONENTS_V2 = 1 << 15  # 32768
+
+# ---------------------------------------------------------------------------
+# Socket.IO namespaces and event names
+# ---------------------------------------------------------------------------
+
+SIO_NAMESPACE_CRATE = "/widgetbot-crate"
+SIO_NAMESPACE_GEN   = "/widgetbot-gen"
+
+SIO_EVENT_CRATE_COMMAND = "crate_command"   # server → client
+SIO_EVENT_CRATE_EVENT   = "crate_event"     # client → server
+SIO_EVENT_CRATE_MESSAGE = "crate_message"   # client → server
+SIO_EVENT_CRATE_USER    = "crate_user"      # client → server
+SIO_EVENT_CRATE_STATUS  = "crate_status"    # bidirectional
+
+SIO_EVENT_GEN_RESULT    = "gen_result"      # server → client
+SIO_EVENT_GEN_PROGRESS  = "gen_progress"    # server → client

@@ -105,13 +105,17 @@ You have access to Google Search. Use it for factual, current, or specific infor
 """
 
 
-def generate_gen_response(prompt: str) -> dict:
+def generate_gen_response(prompt: str, *, on_progress=None) -> dict:
     """Generate a structured /gen response.
 
     Parameters
     ----------
     prompt : str
         The user's generation prompt.
+    on_progress : callable, optional
+        ``(chunk_bytes, total_bytes)`` callback for streaming progress.
+        When provided, uses ``generate_content_stream()`` instead of
+        ``generate_content()``.  Callback errors are silently ignored.
 
     Returns
     -------
@@ -130,16 +134,50 @@ def generate_gen_response(prompt: str) -> dict:
     search_enabled = os.getenv("GEMINI_SEARCH_GROUNDING", "true").lower() == "true"
     tools = [types.Tool(google_search=types.GoogleSearch())] if search_enabled else None
 
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        tools=tools,
+    )
+    contents = [f"{GEN_SYSTEM_PROMPT}\n\nUser prompt: {prompt}"]
+
     try:
-        result = client.models.generate_content(
-            model=model_name,
-            contents=[f"{GEN_SYSTEM_PROMPT}\n\nUser prompt: {prompt}"],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                tools=tools,
-            ),
-        )
-        raw_text = result.text or ""
+        raw_text = ""
+
+        # Streaming path: accumulate chunks and report progress
+        if on_progress is not None:
+            try:
+                total_bytes = 0
+                for chunk in client.models.generate_content_stream(
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                ):
+                    chunk_text = chunk.text or ""
+                    raw_text += chunk_text
+                    chunk_bytes = len(chunk_text.encode("utf-8"))
+                    total_bytes += chunk_bytes
+                    try:
+                        on_progress(chunk_bytes, total_bytes)
+                    except Exception:
+                        pass  # Never let callback errors break generation
+            except Exception as stream_exc:
+                # Fallback to non-streaming on stream failure
+                print(f"[gen_responder] Streaming failed ({stream_exc}), falling back to non-streaming")
+                raw_text = ""
+                result = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                )
+                raw_text = result.text or ""
+        else:
+            # Non-streaming path: unchanged behavior
+            result = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+            raw_text = result.text or ""
 
         # Parse JSON
         try:

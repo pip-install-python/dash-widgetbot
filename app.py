@@ -117,13 +117,20 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         from dash_widgetbot.ai_image import generate_image
         from dash_widgetbot.components import container, text_display, separator
 
+        tracker = interaction.get("_progress_tracker")
+
         options = interaction.get("data", {}).get("options", [])
         question = next((o["value"] for o in options if o["name"] == "question"), "")
         if not question:
             return "Please provide a question."
 
         # 1. Generate structured response
-        result = generate_structured_response(question)
+        if tracker:
+            tracker.update("analyzing")
+        on_progress = tracker.stream_callback() if tracker else None
+        result = generate_structured_response(question, on_progress=on_progress)
+        if tracker:
+            tracker.update("parsing")
 
         if result["error"] or result["response"] is None:
             # Return a danger-colored error container
@@ -144,6 +151,8 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         image_url = None
         files = None
         if ai_response.image_prompt:
+            if tracker:
+                tracker.update("creating_image")
             img_result = generate_image(ai_response.image_prompt)
             if img_result["image_bytes"]:
                 ext = "png" if "png" in img_result["mime_type"] else "jpg"
@@ -161,6 +170,8 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
             payload["_files"] = files
 
         # 5. Post a classic embed so WidgetBot Crate/Widget can render it
+        if tracker:
+            tracker.update("posting")
         desc = next(
             (b.text.content[:500] for b in ai_response.components if b.text),
             ai_response.title,
@@ -172,6 +183,8 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
             "footer": {"text": "Powered by 2plot.ai"},
         })
 
+        if tracker:
+            tracker.update("complete")
         return payload
 
     def _handle_navigate(interaction):
@@ -197,6 +210,8 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         from dash_widgetbot.ai_image import generate_image
         from dash_widgetbot.components import container, text_display, action_row, button
 
+        tracker = interaction.get("_progress_tracker")
+
         options = interaction.get("data", {}).get("options", [])
         prompt = next((o["value"] for o in options if o["name"] == "prompt"), "")
         if not prompt:
@@ -208,7 +223,12 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         discord_user = user.get("username", "unknown")
 
         # Generate structured response
-        result = generate_gen_response(prompt)
+        if tracker:
+            tracker.update("analyzing")
+        on_progress = tracker.stream_callback() if tracker else None
+        result = generate_gen_response(prompt, on_progress=on_progress)
+        if tracker:
+            tracker.update("parsing")
 
         if result["error"] or result["response"] is None:
             error_msg = result["error"] or "Unknown error"
@@ -232,11 +252,15 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         image_bytes = None
         image_mime = ""
         if gen_resp.format == "image" and gen_resp.image:
+            if tracker:
+                tracker.update("creating_image")
             img_result = generate_image(gen_resp.image.prompt)
             if img_result["image_bytes"]:
                 image_bytes = img_result["image_bytes"]
                 image_mime = img_result["mime_type"]
 
+        if tracker:
+            tracker.update("posting")
         entry = GenEntry(
             prompt=prompt,
             response=gen_resp,
@@ -257,7 +281,7 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
 
         # Post a classic embed so WidgetBot Crate/Widget can render it
         _post_channel_message(interaction, {
-            "title": f"✨ {gen_resp.title}",
+            "title": f"\u2728 {gen_resp.title}",
             "description": (
                 f"Generated **{gen_resp.format.replace('_', ' ')}** for: *{prompt[:100]}*\n\n"
                 f"[View in Dash]({dash_url})"
@@ -267,6 +291,8 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
             "footer": {"text": "Powered by 2plot.ai"},
         })
 
+        if tracker:
+            tracker.update("complete")
         ack_container = container(
             text_display(f"# \u2728 {gen_resp.title}"),
             text_display(f"Generated **{gen_resp.format.replace('_', ' ')}** for: *{prompt[:100]}*"),
@@ -329,6 +355,8 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         from dash_widgetbot.ai_responder import reset_client as _reset_client
         import time as _time
 
+        tracker = interaction.get("_progress_tracker")
+
         options = interaction.get("data", {}).get("options", [])
         prompt = next((o["value"] for o in options if o["name"] == "prompt"), "")
         if not prompt:
@@ -337,7 +365,10 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         member = interaction.get("member", {})
         discord_user = member.get("user", {}).get("username", "unknown")
 
-        result = generate_gen_response(prompt)
+        if tracker:
+            tracker.update("analyzing")
+        on_progress = tracker.stream_callback() if tracker else None
+        result = generate_gen_response(prompt, on_progress=on_progress)
         # Retry once on transient httpx / connection errors (stale HTTP/2 pool)
         if result["error"] and any(
             s in result["error"].lower()
@@ -346,17 +377,20 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
             print(f"[dash-widgetbot] /ai: transient error '{result['error'][:80]}', resetting client and retrying...")
             _reset_client()
             _time.sleep(1)
-            result = generate_gen_response(prompt)
+            result = generate_gen_response(prompt, on_progress=on_progress)
+
+        if tracker:
+            tracker.update("parsing")
 
         if result["error"] or result["response"] is None:
             error_msg = result["error"] or "Unknown error"
             _post_channel_message(interaction, {
-                "title": "❌ Generation Failed",
+                "title": "\u274c Generation Failed",
                 "description": f"Could not generate a response.\n\n`{error_msg[:500]}`",
                 "color": 0xED4245,
                 "footer": {"text": "Powered by Gemini AI"},
             })
-            return f"❌ {error_msg[:200]}"
+            return f"\u274c {error_msg[:200]}"
 
         gen_resp = result["response"]
 
@@ -364,12 +398,16 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         image_bytes = None
         image_mime = "image/png"
         if gen_resp.format == "image" and gen_resp.image:
+            if tracker:
+                tracker.update("creating_image")
             img_result = generate_image(gen_resp.image.prompt)
             if img_result["image_bytes"]:
                 image_bytes = img_result["image_bytes"]
                 image_mime = img_result["mime_type"]
 
         # Push to gen_store so Dash page updates
+        if tracker:
+            tracker.update("posting")
         gen_store.add(GenEntry(
             prompt=prompt,
             response=gen_resp,
@@ -396,8 +434,10 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
             image_filename=f"ai_image.{ext}",
         )
 
+        if tracker:
+            tracker.update("complete")
         # Ephemeral follow-up — private confirmation to the invoker only
-        return f"✅ **{gen_resp.title}** posted to the channel. [View in Dash]({dash_url})"
+        return f"\u2705 **{gen_resp.title}** posted to the channel. [View in Dash]({dash_url})"
 
     register_command("ask", _handle_ask, ephemeral=True)
     register_command("navigate", _handle_navigate)
@@ -774,10 +814,25 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
 
         def _run():
             from dash_widgetbot.interactions import _post_loading_channel_message, _delete_channel_message
+
             loading_msg_id = None
             loading_text = _CRATE_LOADING_MSGS.get(cmd_name)
             if loading_text and channel_id:
                 loading_msg_id = _post_loading_channel_message(channel_id, loading_text)
+
+            # Create progress tracker for AI commands
+            tracker = None
+            if cmd_name in {"ai", "gen", "ask"}:
+                from dash_widgetbot.progress import (
+                    ProgressTracker, ChannelMessageSink, SocketIOSink, CrateNotifySink,
+                )
+                sinks = [SocketIOSink()]
+                if loading_msg_id and channel_id:
+                    sinks.append(ChannelMessageSink(channel_id, loading_msg_id))
+                sinks.append(CrateNotifySink())
+                tracker = ProgressTracker(sinks=sinks)
+                fake_interaction["_progress_tracker"] = tracker
+
             try:
                 print(f"[dash-widgetbot] Crate slash /{cmd_name}: '{rest[:80]}'")
                 result = handler(fake_interaction)
@@ -794,6 +849,8 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
                 print(f"[dash-widgetbot] Crate slash /{cmd_name} error: {exc}")
                 traceback.print_exc()
             finally:
+                if tracker:
+                    tracker.close()
                 if loading_msg_id:
                     _delete_channel_message(channel_id, loading_msg_id)
 
@@ -803,6 +860,21 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         notify_cmd = {"action": "notify", "data": f"⏳ {_CMD_NOTIFY[cmd_name]}"}
         result = {"command": cmd_name, "args": rest[:120], "_ts": _cmd_time.time()}
         return result, notify_cmd
+
+# ---------------------------------------------------------------------------
+# Image endpoint: serve gen entry image bytes (omitted from socket payloads)
+# ---------------------------------------------------------------------------
+from dash import hooks as _hooks
+
+@_hooks.route("api/gen/<entry_id>/image", methods=("GET",))
+def gen_image_route(entry_id):
+    from flask import Response
+    from dash_widgetbot.gen_store import gen_store as _gen_store
+    for entry in _gen_store.get_all():
+        if entry.id == entry_id and entry.image_bytes:
+            return Response(entry.image_bytes, content_type=entry.image_mime or "image/png")
+    return Response("Not found", status=404)
+
 
 # Now create the app ---------------------------------------------------------
 import dash
@@ -815,6 +887,21 @@ app = dash.Dash(
     suppress_callback_exceptions=True,
     external_stylesheets=dmc.styles.ALL,
 )
+
+# Guarded Socket.IO setup (requires [realtime] extras)
+from dash_widgetbot._transport import has_socketio_packages as _has_sio_pkgs
+_socketio = None
+if _has_sio_pkgs():
+    from flask_socketio import SocketIO
+    from dash_widgetbot import configure_socketio
+    _socketio = SocketIO(
+        app.server,
+        async_mode='threading',
+        cors_allowed_origins="*",
+        logger=False,
+        engineio_logger=False,
+    )
+    configure_socketio(_socketio)
 
 NAV_LINKS = [
     {"label": "Home", "href": "/"},
@@ -874,4 +961,7 @@ app.layout = dmc.MantineProvider(
 )
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8150)
+    if _socketio:
+        _socketio.run(app.server, debug=True, port=8150)
+    else:
+        app.run(debug=True, port=8150)

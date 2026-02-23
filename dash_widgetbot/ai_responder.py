@@ -227,6 +227,7 @@ def generate_structured_response(
     user_message: str,
     *,
     system_override: str | None = None,
+    on_progress=None,
 ) -> dict:
     """Generate a structured AI response as an ``AIResponse`` model.
 
@@ -236,6 +237,10 @@ def generate_structured_response(
         The user's question / message.
     system_override : str, optional
         Completely replace the structured system prompt.
+    on_progress : callable, optional
+        ``(chunk_bytes, total_bytes)`` callback for streaming progress.
+        When provided, uses ``generate_content_stream()`` instead of
+        ``generate_content()``.  Callback errors are silently ignored.
 
     Returns
     -------
@@ -255,16 +260,51 @@ def generate_structured_response(
     search_enabled = os.getenv("GEMINI_SEARCH_GROUNDING", "true").lower() == "true"
     tools = [types.Tool(google_search=types.GoogleSearch())] if search_enabled else None
 
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        tools=tools,
+    )
+    contents = [f"{system}\n\nUser: {user_message}"]
+
     try:
-        result = client.models.generate_content(
-            model=model_name,
-            contents=[f"{system}\n\nUser: {user_message}"],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                tools=tools,
-            ),
-        )
-        raw_text = result.text or ""
+        raw_text = ""
+        grounding_result = None  # Keep reference for grounding metadata
+
+        # Streaming path: accumulate chunks and report progress
+        if on_progress is not None:
+            try:
+                total_bytes = 0
+                for chunk in client.models.generate_content_stream(
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                ):
+                    chunk_text = chunk.text or ""
+                    raw_text += chunk_text
+                    chunk_bytes = len(chunk_text.encode("utf-8"))
+                    total_bytes += chunk_bytes
+                    try:
+                        on_progress(chunk_bytes, total_bytes)
+                    except Exception:
+                        pass  # Never let callback errors break generation
+            except Exception as stream_exc:
+                # Fallback to non-streaming on stream failure
+                print(f"[ai_responder] Streaming failed ({stream_exc}), falling back to non-streaming")
+                raw_text = ""
+                grounding_result = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                )
+                raw_text = grounding_result.text or ""
+        else:
+            # Non-streaming path: unchanged behavior
+            grounding_result = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+            raw_text = grounding_result.text or ""
 
         # Parse JSON
         try:
@@ -276,21 +316,22 @@ def generate_structured_response(
                 "error": f"JSON parse error: {je}. Raw: {raw_text[:300]}",
             }
 
-        # Extract grounding sources from metadata
+        # Extract grounding sources from metadata (only available in non-streaming path)
         sources = []
-        try:
-            candidate = result.candidates[0] if result.candidates else None
-            grounding_meta = getattr(candidate, "grounding_metadata", None)
-            chunks = getattr(grounding_meta, "grounding_chunks", None) or []
-            for chunk in chunks:
-                web = getattr(chunk, "web", None)
-                if web and getattr(web, "uri", None):
-                    sources.append({
-                        "title": getattr(web, "title", None) or web.uri,
-                        "url": web.uri,
-                    })
-        except Exception:
-            pass  # grounding metadata is optional
+        if grounding_result is not None:
+            try:
+                candidate = grounding_result.candidates[0] if grounding_result.candidates else None
+                grounding_meta = getattr(candidate, "grounding_metadata", None)
+                chunks = getattr(grounding_meta, "grounding_chunks", None) or []
+                for chunk in chunks:
+                    web = getattr(chunk, "web", None)
+                    if web and getattr(web, "uri", None):
+                        sources.append({
+                            "title": getattr(web, "title", None) or web.uri,
+                            "url": web.uri,
+                        })
+            except Exception:
+                pass  # grounding metadata is optional
 
         if sources:
             raw_json["sources"] = sources

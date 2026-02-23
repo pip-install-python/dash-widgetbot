@@ -7,6 +7,117 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.4.0] — 2026-02-23
+
+### Added
+
+#### AI Task Progress Streaming
+
+- **`progress.py`** (new module) — `ProgressTracker` fans out `ProgressEvent` updates to
+  multiple sinks with per-sink throttling and phase-based progress percentages
+- **`ProgressEvent`** dataclass with `format_discord()` rendering text progress bars:
+  `[████████░░] 80% Generating AI response... (1,200 bytes received)`
+- **4 sink implementations:**
+  - `ChannelMessageSink` — edits the Crate-bridge loading message with progress bar text (3s throttle)
+  - `EphemeralSink` — PATCHes the `@original` ephemeral deferred response (3s throttle)
+  - `SocketIOSink` — emits `gen_progress` events on `/widgetbot-gen` namespace (0.5s throttle)
+  - `CrateNotifySink` — pushes `crate.notify()` on phase transitions only (5s throttle)
+- **Progress phases:** `analyzing` (0%) → `generating` (10-80%) → `parsing` (85%) →
+  `creating_image` (90%) → `posting` (95%) → `complete` (100%)
+- **Gemini streaming** — `generate_gen_response()` and `generate_structured_response()`
+  accept `on_progress` kwarg; uses `generate_content_stream()` for chunk-level byte
+  progress during text generation. Falls back to non-streaming on failure.
+  **Zero additional Gemini API cost** — streaming delivers the same tokens incrementally.
+- **`emit_progress()`** helper in `_bridge.py` for Socket.IO `gen_progress` events
+- **`_edit_channel_message()`** helper in `interactions.py` for PATCHing channel messages
+- **Tracker injection** — `_handle_command()` in `interactions.py` automatically creates
+  a `ProgressTracker` with `EphemeralSink` + `SocketIOSink` for `/ai`, `/gen`, `/ask`
+- **Crate-bridge tracker** — `_run()` in `app.py` creates tracker with
+  `ChannelMessageSink` + `SocketIOSink` + `CrateNotifySink` for Crate-bridge AI commands
+- **Gen Gallery progress cards** — `pages/discord_to_dash.py` listens for `gen_progress`
+  Socket.IO events and renders animated `dmc.Progress` + `dmc.Loader` cards that
+  appear during generation and auto-remove on completion
+- **Exported:** `ProgressTracker`, `ProgressEvent`, `emit_progress` from `__init__.py`
+
+#### Socket.IO Real-Time Transport (`[realtime]` extras)
+
+- **`[realtime]` optional extras group** — `pip install dash-widgetbot[realtime]` adds
+  `flask-socketio>=5.3.0`, `dash-socketio>=1.1.1`, and `simple-websocket>=1.0.0`
+- **`configure_socketio(socketio)`** — public API to register the app's `SocketIO` instance
+  with the hook; call once after `app = dash.Dash(...)` in your app entry point
+- **`is_socketio_available()`** — introspection helper; returns `True` when `configure_socketio`
+  has been called with a non-`None` instance
+- **`emit_command(command_dict, namespace=None)`** — server-side push helper in `_bridge.py`;
+  emits any crate command dict on the Socket.IO `/widgetbot-crate` namespace.
+  Returns `True` if emitted, `False` when Socket.IO is not configured.
+  Use from background threads or webhook handlers.
+- **`_transport.py`** (new module) — singleton transport registry; no flask-socketio
+  import at module level, fully safe to import without `[realtime]` installed
+- **`SIO_NAMESPACE_CRATE`** / **`SIO_NAMESPACE_GEN`** — namespace constants exported
+  from `_constants.py` and `__init__.py`
+
+#### Dual-Path Design (store bridge always active, Socket.IO additive)
+
+```
+Store bridge (ALWAYS active)           Socket.IO path (opt-in, [realtime])
+────────────────────────────           ──────────────────────────────────────
+Crate event → set_props()              Crate event → socket.emit()
+  → dcc.Store → Dash callback            → /widgetbot-crate NS
+
+server cmd → dcc.Store                 server cmd → emit_command()
+  → clientside_callback → Crate           → crate_command event → Crate
+
+gen_store.add() → dcc.Interval         gen_store.add() → socketio.emit()
+  → poll_gen_store → render cards        → /widgetbot-gen NS → render card
+```
+
+- **`crate.py`** — injects `DashSocketIO` component into the hidden stores `Div`
+  when `[realtime]` packages are installed; JS init block connects to
+  `/widgetbot-crate` namespace and mirrors every `set_props()` event call
+  with a matching `socket.emit()` (zero latency for real-time listeners).
+  Server-pushed `crate_command` events dispatch directly to the Crate API
+  (same action handlers as `_DISPATCH_JS`).
+- **`widget.py`** — same DashSocketIO injection and JS event mirroring as crate,
+  using the `/widgetbot-crate` namespace; events only (no server→client commands).
+- **`gen_store.GenStore.add()`** — emits `gen_result` on `/widgetbot-gen` after
+  appending to the list (outside the lock); image bytes are **not** included in the
+  payload — use `GET /api/gen/<entry_id>/image` instead.
+- **`pages/discord_to_dash.py`** — adds `DashSocketIO` to layout and
+  `_on_gen_result_sio` callback when packages are available; `dcc.Interval`
+  stays active as the zero-dependency fallback.
+
+#### New Routes (example app)
+
+- **`GET /api/gen/<entry_id>/image`** — serves `image_bytes` for a `GenEntry` by ID;
+  required since gen socket payloads omit bytes to stay JSON-serializable.
+
+### Example App Integration Pattern
+
+```python
+from dash_widgetbot._transport import has_socketio_packages
+_socketio = None
+if has_socketio_packages():
+    from flask_socketio import SocketIO
+    from dash_widgetbot import configure_socketio
+    _socketio = SocketIO(app.server, async_mode='threading', cors_allowed_origins="*")
+    configure_socketio(_socketio)
+
+if __name__ == "__main__":
+    if _socketio:
+        _socketio.run(app.server, debug=True, port=8150)
+    else:
+        app.run(debug=True, port=8150)
+```
+
+### Invariants
+
+- All `dcc.Store` components remain — permanent fallback transport, unchanged
+- All `set_props()` calls in JS fire alongside any Socket.IO emission
+- `register_command()` signature unchanged
+- `pip install dash-widgetbot` (no extras) runs cleanly with zero Socket.IO imports
+
+---
+
 ## [0.3.0] — 2026-02-23
 
 ### Added
@@ -179,5 +290,7 @@ Initial release.
 
 ---
 
+[0.4.0]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.4.0
+[0.3.0]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.3.0
 [0.2.0]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.2.0
 [0.1.0]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.1.0
