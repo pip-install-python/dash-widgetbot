@@ -6,7 +6,7 @@ the Crate instance, wire events back to stores, and dispatch commands.
 
 from dash import hooks, html, dcc, Input, Output
 
-from ._constants import CDN_CRATE, get_crate_store_ids
+from ._constants import CDN_CRATE, DEFAULT_SHARD, get_crate_store_ids
 
 _cdn_loaded = False
 
@@ -44,9 +44,19 @@ function(config) {
 
     // Build options -------------------------------------------------------
     var opts = {server: config.server};
-    var simple = ['channel','thread','color','css','username','avatar','token','shard'];
+    var simple = ['channel','color','css','username','avatar','token','shard'];
     for (var i = 0; i < simple.length; i++) {
         if (config[simple[i]]) opts[simple[i]] = config[simple[i]];
+    }
+    // Handle thread separately: when a custom shard is set but no thread
+    // is specified, explicitly pass an empty string so WidgetBot doesn't
+    // append the literal string "undefined" to the channel URL.
+    // Crate v3 / embed v4.1.x coerces null back to undefined; empty
+    // string is the only falsy value that survives as a string type.
+    if (config.thread) {
+        opts.thread = config.thread;
+    } else if (opts.shard) {
+        opts.thread = '';
     }
     if (config.location)       opts.location = config.location;
     if (config.glyph)          opts.glyph = config.glyph;
@@ -154,6 +164,7 @@ function(config) {
     });
 
     crate.on('sentMessage', function(data) {
+        console.debug('[dash-widgetbot] sentMessage fired:', data);
         var payload = {
             type: 'sentMessage', content: data.content || '',
             channel_id: data.channel ? (data.channel.id || '') : '',

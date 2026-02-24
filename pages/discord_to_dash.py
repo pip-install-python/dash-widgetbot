@@ -122,7 +122,7 @@ layout = dmc.Container(
     Input("gen-poll", "n_intervals"),
     State("gen-cursor", "data"),
     State("gen-feed", "children"),
-    prevent_initial_call=False,
+    prevent_initial_call=True,
 )
 def poll_gen_store(_n, cursor, existing_children):
     """Poll for new gen entries and prepend them to the feed."""

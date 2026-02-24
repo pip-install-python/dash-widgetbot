@@ -1,7 +1,7 @@
 """DiscordWidget -- inline embedded Discord chat via plain iframe + postMessage.
 
 Renders the WidgetBot embed as a standard ``html.Iframe`` pointing directly to
-``https://e.widgetbot.io/channels/{server}/{channel}``.  No CDN script is
+the configured shard (default ``https://e.widgetbot.io``).  No CDN script is
 required, so there is no polyfill conflict with the Crate CDN.
 
 Events are received by registering a single ``window.addEventListener('message',
@@ -10,7 +10,7 @@ Events are received by registering a single ``window.addEventListener('message',
 
 from dash import hooks, html, dcc, Input, Output
 
-from ._constants import get_widget_store_ids
+from ._constants import get_widget_store_ids, DEFAULT_SHARD
 
 # ---------------------------------------------------------------------------
 # Clientside JS: register postMessage listener and wire events
@@ -37,8 +37,9 @@ function(config) {
         // 2. Verify this is a WidgetBot embed-api message
         if (!data || data.widgetbot !== true) return;
 
-        // 3. Verify origin
-        if (event.origin !== 'https://e.widgetbot.io') return;
+        // 3. Verify origin (use configured shard, fall back to default)
+        var expectedOrigin = (config.shard || '').replace(/\/$/, '') || 'https://e.widgetbot.io';
+        if (event.origin !== expectedOrigin) return;
 
         // NOTE: Do NOT check event.source vs iframe.contentWindow --
         // cross-origin iframes return null for contentWindow, so that
@@ -120,13 +121,15 @@ function(config) {
 """
 
 
-def discord_widget_container(server, channel="", *, width="100%", height="600px", container_id="widgetbot-container"):
+def discord_widget_container(server, channel="", *, width="100%", height="600px",
+                             shard="", container_id="widgetbot-container"):
     """Return an ``html.Iframe`` that embeds the Discord channel directly.
 
     Place this in your page layout where the inline widget should appear.
     """
+    shard_url = shard.rstrip("/") if shard else DEFAULT_SHARD
     return html.Iframe(
-        src=f"https://e.widgetbot.io/channels/{server}/{channel}",
+        src=f"{shard_url}/channels/{server}/{channel}",
         id=container_id,
         style={"width": width, "height": height, "border": "none"},
         allow="clipboard-write",

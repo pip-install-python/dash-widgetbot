@@ -1,6 +1,7 @@
 """Store IDs, CDN URLs, and defaults for dash-widgetbot."""
 
 CDN_CRATE = "https://cdn.jsdelivr.net/npm/@widgetbot/crate@3"
+DEFAULT_SHARD = "https://e.widgetbot.io"
 
 CRATE_STORE_KEYS = ("config", "command", "event", "message", "user", "status")
 

@@ -21,6 +21,7 @@ from ._bridge import (
 )
 from .progress import ProgressTracker, ProgressEvent
 from ._constants import (
+    DEFAULT_SHARD,
     get_crate_store_ids,
     get_widget_store_ids,
     SIO_NAMESPACE_CRATE,
@@ -201,6 +202,7 @@ __all__ = [
     "emit_progress",
     "ProgressTracker",
     "ProgressEvent",
+    "DEFAULT_SHARD",
     "get_crate_store_ids",
     "get_widget_store_ids",
     "STORE_IDS",

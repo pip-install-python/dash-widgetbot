@@ -11,6 +11,7 @@ from dash_widgetbot import discord_widget_container, get_widget_store_ids
 
 SERVER = os.getenv("WIDGETBOT_SERVER", "299881420891881473")
 CHANNEL = os.getenv("WIDGETBOT_CHANNEL", "355719584830980096")
+SHARD = os.getenv("WIDGETBOT_SHARD", "")
 CONTAINER_ID = "wgt-embed-container"
 
 # Registration happens in app.py before Dash() -- same pattern as multi_instance.py.
@@ -25,7 +26,7 @@ layout = dmc.Container(
         dmc.Title("Inline Widget", order=2, mb="md"),
         dmc.Text(
             "An inline Discord embed rendered as a cross-origin iframe pointing directly to "
-            "e.widgetbot.io. No floating button — the chat is always visible in the page.",
+            "the WidgetBot shard. No floating button — the chat is always visible in the page.",
             c="dimmed",
             mb="md",
         ),
@@ -136,6 +137,7 @@ layout = dmc.Container(
                 channel=CHANNEL,
                 width="100%",
                 height="500px",
+                shard=SHARD,
                 container_id=CONTAINER_ID,
             ),
             p="md",

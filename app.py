@@ -16,11 +16,13 @@ from dash_widgetbot import add_discord_crate, add_discord_widget, add_discord_in
 SERVER = os.getenv("WIDGETBOT_SERVER", "299881420891881473")
 CHANNEL = os.getenv("WIDGETBOT_CHANNEL", "355719584830980096")
 COLOR = os.getenv("WIDGETBOT_COLOR", "#5865f2")
+SHARD = os.getenv("WIDGETBOT_SHARD", "")
 
 add_discord_crate(
     server=SERVER,
     channel=CHANNEL,
     color=COLOR,
+    shard=SHARD,
     defer=True,
 )
 
@@ -32,6 +34,7 @@ SUPPORT_IDS = add_discord_crate(
     channel=CHANNEL,
     prefix="support",
     color="#e74c3c",
+    shard=SHARD,
     location=["top", "right"],
     defer=False,
     pages=["/multi-instance"],
@@ -42,6 +45,7 @@ COMMUNITY_IDS = add_discord_crate(
     channel=CHANNEL_2,
     prefix="community",
     color="#2ecc71",
+    shard=SHARD,
     location=["top", "left"],
     defer=False,
     pages=["/multi-instance"],
@@ -51,6 +55,7 @@ COMMUNITY_IDS = add_discord_crate(
 WIDGET_IDS = add_discord_widget(
     server=SERVER,
     channel=CHANNEL,
+    shard=SHARD,
     width="100%",
     height="500px",
     container_id="wgt-embed-container",
