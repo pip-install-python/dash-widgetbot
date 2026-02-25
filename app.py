@@ -65,6 +65,24 @@ WIDGET_IDS = add_discord_widget(
 if os.getenv("DISCORD_PUBLIC_KEY"):
     add_discord_interactions()
 
+    # Retry helper for transient SSL/connection errors
+    def _discord_request(method, url, *, max_retries=2, backoff=1.0, **kwargs):
+        """Discord API request with retry on transient SSL/connection errors."""
+        import requests as _req
+        kwargs.setdefault("timeout", 15)
+        last_exc = None
+        for attempt in range(max_retries + 1):
+            try:
+                return getattr(_req, method)(url, **kwargs)
+            except (_req.exceptions.ConnectionError, _req.exceptions.Timeout) as exc:
+                last_exc = exc
+                if attempt < max_retries:
+                    import time
+                    time.sleep(backoff * (attempt + 1))
+                    print(f"[dash-widgetbot] Discord API retry {attempt+1}/{max_retries}: {exc}")
+                else:
+                    raise
+
     # Helper: post a classic embed to the channel so WidgetBot can render it
     def _post_channel_message(interaction, embed, *, image_bytes=None, image_mime="image/png", image_filename="ai_image.png"):
         """POST a type-0 channel message with a classic embed.
@@ -76,17 +94,19 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         When *image_bytes* is provided the message is sent as multipart
         form-data with the image attached and the embed's ``image`` field
         pointing to ``attachment://<image_filename>``.
+
+        Returns True on success, False on failure.
         """
-        import requests as _req
         import json as _json
         channel_id = interaction.get("channel_id", "")
         bot_token = os.getenv("DISCORD_BOT_TOKEN", "")
         if not channel_id or not bot_token:
-            return
+            return False
         try:
             if image_bytes:
                 embed["image"] = {"url": f"attachment://{image_filename}"}
-                _req.post(
+                resp = _discord_request(
+                    "post",
                     f"https://discord.com/api/v10/channels/{channel_id}/messages",
                     headers={"Authorization": f"Bot {bot_token}"},
                     data={"payload_json": _json.dumps({"embeds": [embed]})},
@@ -94,17 +114,19 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
                     timeout=30,
                 )
             else:
-                _req.post(
+                resp = _discord_request(
+                    "post",
                     f"https://discord.com/api/v10/channels/{channel_id}/messages",
                     headers={
                         "Authorization": f"Bot {bot_token}",
                         "Content-Type": "application/json",
                     },
                     json={"embeds": [embed]},
-                    timeout=10,
                 )
+            return resp.ok
         except Exception as exc:
             print(f"[dash-widgetbot] _post_channel_message failed: {exc}")
+            return False
 
     _COLOR_MAP = {
         "primary": 0x5865F2,
@@ -181,7 +203,7 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
             (b.text.content[:500] for b in ai_response.components if b.text),
             ai_response.title,
         )
-        _post_channel_message(interaction, {
+        posted = _post_channel_message(interaction, {
             "title": ai_response.title,
             "description": desc,
             "color": _COLOR_MAP.get(ai_response.color, 0x5865F2),
@@ -189,7 +211,7 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         })
 
         if tracker:
-            tracker.update("complete")
+            tracker.update("complete" if posted else "error")
         return payload
 
     def _handle_navigate(interaction):
@@ -285,7 +307,7 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         dash_url = f"{_base.rstrip('/')}/discord-to-dash"
 
         # Post a classic embed so WidgetBot Crate/Widget can render it
-        _post_channel_message(interaction, {
+        posted = _post_channel_message(interaction, {
             "title": f"\u2728 {gen_resp.title}",
             "description": (
                 f"Generated **{gen_resp.format.replace('_', ' ')}** for: *{prompt[:100]}*\n\n"
@@ -297,7 +319,15 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         })
 
         if tracker:
-            tracker.update("complete")
+            tracker.update("complete" if posted else "error")
+        if not posted:
+            err_container = container(
+                text_display("# \u26a0\ufe0f Partially Complete"),
+                text_display(f"Content generated and saved to Gen Gallery, but failed to post to Discord channel.\n\n[View in Dash]({dash_url})"),
+                text_display("-# Powered by 2plot.ai"),
+                color=0xFEE75C,
+            )
+            return {"components": [err_container]}
         ack_container = container(
             text_display(f"# \u2728 {gen_resp.title}"),
             text_display(f"Generated **{gen_resp.format.replace('_', ' ')}** for: *{prompt[:100]}*"),
@@ -431,7 +461,7 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
 
         # Post ONE channel message (WidgetBot renders this)
         ext = "png" if "png" in image_mime else "jpg"
-        _post_channel_message(
+        posted = _post_channel_message(
             interaction,
             _build_gen_embed(gen_resp, dash_url=dash_url),
             image_bytes=image_bytes,
@@ -440,8 +470,10 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         )
 
         if tracker:
-            tracker.update("complete")
+            tracker.update("complete" if posted else "error")
         # Ephemeral follow-up — private confirmation to the invoker only
+        if not posted:
+            return f"\u26a0\ufe0f Response generated and saved to Gen Gallery, but failed to post to Discord channel. [View in Dash]({dash_url})"
         return f"\u2705 **{gen_resp.title}** posted to the channel. [View in Dash]({dash_url})"
 
     register_command("ask", _handle_ask, ephemeral=True)
@@ -455,7 +487,6 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
 
     # Register all slash commands with the guild (instant availability)
     def _register_guild_commands():
-        import requests as _req
         _app_id = os.getenv("DISCORD_APPLICATION_ID", "")
         _bot_token = os.getenv("DISCORD_BOT_TOKEN", "")
         _guild_id = os.getenv("DISCORD_GUILD_ID", "1246197743307980940")
@@ -493,11 +524,11 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
             },
         ]
         try:
-            resp = _req.put(
+            resp = _discord_request(
+                "put",
                 f"https://discord.com/api/v10/applications/{_app_id}/guilds/{_guild_id}/commands",
                 headers={"Authorization": f"Bot {_bot_token}"},
                 json=_cmds,
-                timeout=15,
             )
             if resp.ok:
                 print(f"[dash-widgetbot] Registered {len(_cmds)} guild commands successfully.")
@@ -764,6 +795,10 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         "gen": "⏳ Generating content...",
     }
 
+    # Dedup guard — prevent duplicate dispatch when the same sentMessage fires twice
+    _last_crate_cmd: dict = {"content": "", "ts": 0.0}
+    _DEDUP_WINDOW = 5.0  # seconds
+
     @_dcallback(
         _DOutput("_crate-slash-result", "data"),
         _DOutput("_widgetbot-crate-command", "data", allow_duplicate=True),
@@ -786,6 +821,15 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         content = (event_data.get("content") or "").strip()
         if not content.startswith("/"):
             return _no_update, _no_update
+
+        # Dedup: skip if identical content arrived within the window
+        import time as _dedup_time
+        now = _dedup_time.time()
+        if content == _last_crate_cmd["content"] and (now - _last_crate_cmd["ts"]) < _DEDUP_WINDOW:
+            print(f"[dash-widgetbot] Dedup: skipping duplicate crate command '{content[:60]}'")
+            return _no_update, _no_update
+        _last_crate_cmd["content"] = content
+        _last_crate_cmd["ts"] = now
 
         # Parse "/cmd rest of text" — strip leading slash, split on first space
         parts = content[1:].split(None, 1)

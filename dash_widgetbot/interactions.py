@@ -25,6 +25,22 @@ _ephemeral_commands: set = set()
 _INTERACTIONS_PATH = "/api/discord/interactions"
 
 
+def _discord_request(method, url, *, max_retries=2, backoff=1.0, **kwargs):
+    """Discord API request with retry on transient SSL/connection errors."""
+    kwargs.setdefault("timeout", 15)
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            return getattr(requests, method)(url, **kwargs)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                time.sleep(backoff * (attempt + 1))
+                print(f"[dash-widgetbot] Discord API retry {attempt+1}/{max_retries}: {exc}")
+            else:
+                raise
+
+
 def _detect_ngrok_url():
     """Query the local ngrok agent API for the current public HTTPS URL.
 
@@ -62,14 +78,14 @@ def _post_loading_channel_message(channel_id: str, content: str) -> str | None:
     if not bot_token or not channel_id:
         return None
     try:
-        resp = requests.post(
+        resp = _discord_request(
+            "post",
             f"https://discord.com/api/v10/channels/{channel_id}/messages",
             headers={
                 "Authorization": f"Bot {bot_token}",
                 "Content-Type": "application/json",
             },
             json={"content": content},
-            timeout=10,
         )
         if resp.ok:
             msg_id = resp.json().get("id")
@@ -82,26 +98,33 @@ def _post_loading_channel_message(channel_id: str, content: str) -> str | None:
 
 
 def _delete_channel_message(channel_id: str, message_id: str) -> None:
-    """Delete a channel message by ID.
+    """Delete a channel message by ID (fire-and-forget in a daemon thread).
 
     Used to remove the temporary loading message once the real response
-    has been posted to the channel.
+    has been posted to the channel.  Runs non-blocking with no retries
+    so it never delays the main handler thread.
     """
     bot_token = os.getenv("DISCORD_BOT_TOKEN", "")
     if not bot_token or not channel_id or not message_id:
         return
-    try:
-        resp = requests.delete(
-            f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}",
-            headers={"Authorization": f"Bot {bot_token}"},
-            timeout=10,
-        )
-        if resp.ok or resp.status_code == 204:
-            print(f"[dash-widgetbot] Loading message deleted (id={message_id})")
-        else:
-            print(f"[dash-widgetbot] Loading message delete failed ({resp.status_code})")
-    except Exception as exc:
-        print(f"[dash-widgetbot] Loading message delete exception: {exc}")
+
+    def _do_delete():
+        try:
+            resp = _discord_request(
+                "delete",
+                f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}",
+                max_retries=0,
+                headers={"Authorization": f"Bot {bot_token}"},
+                timeout=5,
+            )
+            if resp.ok or resp.status_code == 204:
+                print(f"[dash-widgetbot] Loading message deleted (id={message_id})")
+            else:
+                print(f"[dash-widgetbot] Loading message delete failed ({resp.status_code})")
+        except Exception as exc:
+            print(f"[dash-widgetbot] Loading message delete exception: {exc}")
+
+    threading.Thread(target=_do_delete, daemon=True).start()
 
 
 def _edit_channel_message(channel_id: str, message_id: str, content: str) -> bool:
@@ -110,14 +133,14 @@ def _edit_channel_message(channel_id: str, message_id: str, content: str) -> boo
     if not bot_token or not channel_id or not message_id:
         return False
     try:
-        resp = requests.patch(
+        resp = _discord_request(
+            "patch",
             f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}",
             headers={
                 "Authorization": f"Bot {bot_token}",
                 "Content-Type": "application/json",
             },
             json={"content": content},
-            timeout=10,
         )
         return resp.ok
     except Exception as exc:
@@ -189,10 +212,10 @@ def sync_discord_endpoint(*, base_url=None, bot_token=None, application_id=None)
 
     # Check what Discord currently has
     try:
-        get_resp = requests.get(
+        get_resp = _discord_request(
+            "get",
             f"https://discord.com/api/v10/applications/@me",
             headers={"Authorization": f"Bot {token}"},
-            timeout=10,
         )
         if get_resp.ok:
             current = get_resp.json().get("interactions_endpoint_url", "")
@@ -205,11 +228,11 @@ def sync_discord_endpoint(*, base_url=None, bot_token=None, application_id=None)
     # Update Discord
     print(f"[dash-widgetbot] Updating interactions endpoint ({source}): {endpoint_url}")
     try:
-        resp = requests.patch(
+        resp = _discord_request(
+            "patch",
             f"https://discord.com/api/v10/applications/@me",
             headers={"Authorization": f"Bot {token}"},
             json={"interactions_endpoint_url": endpoint_url},
-            timeout=15,
         )
         if resp.ok:
             print(f"[dash-widgetbot] Endpoint updated successfully!")

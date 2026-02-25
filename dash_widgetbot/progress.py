@@ -82,20 +82,42 @@ class ProgressEvent:
 # Discord API helpers
 # ---------------------------------------------------------------------------
 
+def _discord_request(method, url, *, max_retries=2, backoff=1.0, **kwargs):
+    """Discord API request with retry on transient SSL/connection errors."""
+    kwargs.setdefault("timeout", 15)
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            return getattr(_req, method)(url, **kwargs)
+        except (_req.exceptions.ConnectionError, _req.exceptions.Timeout) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                time.sleep(backoff * (attempt + 1))
+                print(f"[progress] Discord API retry {attempt+1}/{max_retries}: {exc}")
+            else:
+                raise
+
+
 def _edit_channel_message(channel_id: str, message_id: str, content: str) -> bool:
-    """PATCH an existing channel message. Returns True on success."""
+    """PATCH an existing channel message. Returns True on success.
+
+    Uses ``max_retries=0`` — progress edits are cosmetic and should never
+    block the generation pipeline with retry backoff.
+    """
     bot_token = os.getenv("DISCORD_BOT_TOKEN", "")
     if not bot_token or not channel_id or not message_id:
         return False
     try:
-        resp = _req.patch(
+        resp = _discord_request(
+            "patch",
             f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}",
+            max_retries=0,
             headers={
                 "Authorization": f"Bot {bot_token}",
                 "Content-Type": "application/json",
             },
             json={"content": content},
-            timeout=10,
+            timeout=5,
         )
         return resp.ok
     except Exception as exc:
@@ -104,14 +126,20 @@ def _edit_channel_message(channel_id: str, message_id: str, content: str) -> boo
 
 
 def _patch_original(application_id: str, token: str, content: str) -> bool:
-    """PATCH the @original ephemeral deferred response. Returns True on success."""
+    """PATCH the @original ephemeral deferred response. Returns True on success.
+
+    Uses ``max_retries=0`` — progress edits are cosmetic and should never
+    block the generation pipeline.
+    """
     if not application_id or not token:
         return False
     try:
-        resp = _req.patch(
+        resp = _discord_request(
+            "patch",
             f"https://discord.com/api/v10/webhooks/{application_id}/{token}/messages/@original",
+            max_retries=0,
             json={"content": content},
-            timeout=10,
+            timeout=5,
         )
         return resp.ok
     except Exception as exc:
@@ -128,6 +156,10 @@ class ChannelMessageSink:
 
     Throttled to 1 edit per ``min_interval`` seconds (default 3s).
     Phase transitions bypass the throttle.
+
+    Edits fire in daemon threads so a failing Discord API never blocks the
+    generation pipeline.  If the previous edit is still in flight, the new
+    one is silently dropped (no queuing — only the latest state matters).
     """
 
     def __init__(self, channel_id: str, message_id: str, *, min_interval: float = 3.0):
@@ -136,15 +168,29 @@ class ChannelMessageSink:
         self.min_interval = min_interval
         self._last_send: float = 0.0
         self._last_phase: str = ""
+        self._in_flight = threading.Event()
+        self._in_flight.set()  # starts "not busy"
 
     def send(self, event: ProgressEvent) -> None:
         now = time.time()
         phase_changed = event.phase != self._last_phase
         if not phase_changed and (now - self._last_send) < self.min_interval:
             return
+        # Skip if the previous edit is still in flight
+        if not self._in_flight.is_set():
+            return
         self._last_send = now
         self._last_phase = event.phase
-        _edit_channel_message(self.channel_id, self.message_id, event.format_discord())
+        content = event.format_discord()
+        self._in_flight.clear()
+
+        def _do_edit():
+            try:
+                _edit_channel_message(self.channel_id, self.message_id, content)
+            finally:
+                self._in_flight.set()
+
+        threading.Thread(target=_do_edit, daemon=True).start()
 
     def close(self) -> None:
         pass
@@ -155,6 +201,9 @@ class EphemeralSink:
 
     Throttled to 1 edit per ``min_interval`` seconds (default 3s).
     Phase transitions bypass the throttle.
+
+    PATCHes fire in daemon threads so a failing Discord API never blocks
+    the generation pipeline.
     """
 
     def __init__(self, application_id: str, token: str, *, min_interval: float = 3.0):
@@ -163,15 +212,28 @@ class EphemeralSink:
         self.min_interval = min_interval
         self._last_send: float = 0.0
         self._last_phase: str = ""
+        self._in_flight = threading.Event()
+        self._in_flight.set()
 
     def send(self, event: ProgressEvent) -> None:
         now = time.time()
         phase_changed = event.phase != self._last_phase
         if not phase_changed and (now - self._last_send) < self.min_interval:
             return
+        if not self._in_flight.is_set():
+            return
         self._last_send = now
         self._last_phase = event.phase
-        _patch_original(self.application_id, self.token, event.format_discord())
+        content = event.format_discord()
+        self._in_flight.clear()
+
+        def _do_patch():
+            try:
+                _patch_original(self.application_id, self.token, content)
+            finally:
+                self._in_flight.set()
+
+        threading.Thread(target=_do_patch, daemon=True).start()
 
     def close(self) -> None:
         pass

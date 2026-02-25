@@ -7,6 +7,75 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.4.1-pre] — 2026-02-24
+
+### Fixed
+
+#### Discord API Retry Logic
+- **`_discord_request()` helper** added to `app.py`, `interactions.py`, and `progress.py` —
+  retries on transient `ConnectionError` (including SSL EOF) and `Timeout` with 2 attempts
+  and linear backoff (1s, 2s). Does **not** retry HTTP 4xx/5xx (real API errors).
+- **`_post_channel_message()`** now returns `True`/`False` instead of `None`, enabling
+  callers to detect post failures and respond honestly.
+- **`_post_loading_channel_message()`**, **`_delete_channel_message()`**,
+  **`_edit_channel_message()`** in `interactions.py` — all use retry helper.
+- **`_edit_channel_message()`** in `progress.py` — progress bar edits use retry helper.
+- **`_register_guild_commands()`** — guild command registration uses retry helper
+  (fixes SSL failures during Werkzeug stat reloader restarts).
+- **`sync_discord_endpoint()`** — both GET check and PATCH update use retry helper.
+
+#### Honest Failure Feedback
+- **`_handle_ai()`** — reports `"error"` phase to tracker and returns warning message
+  when channel post fails: *"Response generated and saved to Gen Gallery, but failed to
+  post to Discord channel."*
+- **`_handle_gen()`** — returns a warning Components V2 container instead of false success
+  when channel post fails.
+- **`_handle_ask()`** — reports `"error"` phase to tracker on post failure.
+
+#### Crate-Bridge Deduplication
+- **`_handle_crate_slash`** — added content+timestamp dedup guard (5s window) to prevent
+  duplicate command dispatch when the same `sentMessage` event fires twice. Previously,
+  a single `/ai` command could spawn two background threads with two loading messages
+  and two Gemini API calls.
+
+#### Non-Blocking Progress Sinks
+- **`ChannelMessageSink`** in `progress.py` — Discord channel edits now fire in daemon
+  threads. A failing Discord API (SSL errors, timeouts) never blocks the generation
+  pipeline. Uses `threading.Event` in-flight guard: if the previous edit hasn't completed,
+  the new one is silently dropped (only the latest state matters for a progress bar).
+- **`EphemeralSink`** in `progress.py` — same non-blocking daemon thread pattern for
+  PATCH `@original` ephemeral edits.
+- **`_delete_channel_message()`** in `interactions.py` — loading message cleanup now
+  fires in a daemon thread (fire-and-forget). Never blocks the handler thread.
+- **`_edit_channel_message()`** and **`_patch_original()`** in `progress.py` — reduced
+  to `max_retries=0` and `timeout=5s`. Progress edits are cosmetic; retrying with backoff
+  (previously 2 retries, 1s+2s) could block the generation thread for 8+ seconds per
+  failed edit.
+
+#### Gen Gallery DashSocketIO Property Bug
+- **`pages/discord_to_dash.py`** — SIO callbacks referenced `Input("...", "data")` but
+  DashSocketIO sets `props["data-<eventName>"]` (e.g. `data-gen_result`), so the callbacks
+  **never fired**. Cards only appeared via the `dcc.Interval` poll (which masked the bug).
+- Fixed `Input` property names: `"data"` → `"data-gen_result"` / `"data-gen_progress"`
+- Removed incorrect `data.get("data", {})` unwrapping — DashSocketIO sets the raw event
+  payload directly on the prop, not wrapped in a `{"data": ...}` envelope.
+- **Merged two `DashSocketIO` components into one** — each event updates a distinct prop
+  (`data-gen_result`, `data-gen_progress`), so no React batching conflict is possible.
+  The previous two-component split was unnecessary.
+
+### Changed
+
+#### Gen Gallery Transport (unified poll + SIO)
+- **`pages/discord_to_dash.py`** — both transport branches now include `dcc.Store` +
+  `dcc.Interval` (30s safety-net when SIO active, 2s primary when not). The poll callback
+  is always registered (no conditional `if _has_sio:` / `else:` for polling).
+- When `[realtime]` is installed, `DashSocketIO` provides instant delivery; the 30s poll
+  catches any missed events without the overhead of the original 2s poll.
+- When `[realtime]` is **not** installed, `dcc.Interval` at 2s remains the primary delivery.
+- **Status badge** reflects active transport: "real-time" (indigo) vs "polling" (teal)
+
+---
+
 ## [0.4.0] — 2026-02-23
 
 ### Added
@@ -84,7 +153,7 @@ gen_store.add() → dcc.Interval         gen_store.add() → socketio.emit()
   payload — use `GET /api/gen/<entry_id>/image` instead.
 - **`pages/discord_to_dash.py`** — adds `DashSocketIO` to layout and
   `_on_gen_result_sio` callback when packages are available; `dcc.Interval`
-  stays active as the zero-dependency fallback.
+  is the zero-dependency fallback (see 0.4.1-pre for conditional transport).
 
 #### New Routes (example app)
 
@@ -290,6 +359,7 @@ Initial release.
 
 ---
 
+[0.4.1-pre]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.4.1-pre
 [0.4.0]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.4.0
 [0.3.0]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.3.0
 [0.2.0]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.2.0

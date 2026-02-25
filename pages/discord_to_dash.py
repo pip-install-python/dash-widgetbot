@@ -1,13 +1,14 @@
 """Gen Gallery page -- infinite scroll feed of AI-generated Dash components.
 
-Polls ``gen_store`` every 2 seconds for new entries and renders them
-as styled DMC cards. Includes a local test panel for development
-without Discord.
+Transport modes:
+  Socket.IO (when [realtime] installed):
+    gen_store.add() emits gen_result on /widgetbot-gen → DashSocketIO
+    → _on_gen_result_sio callback → card prepended instantly (<100ms).
+    A 30s safety-net poll catches any missed events.
+  Polling fallback (no [realtime]):
+    dcc.Interval polls gen_store every 2s → poll_gen_store callback.
 
-Socket.IO path (additive, when [realtime] installed):
-  gen_store.add() emits gen_result on /widgetbot-gen → DashSocketIO
-  → _on_gen_result_sio callback → card prepended instantly (<100ms).
-  dcc.Interval stays active as the zero-dependency fallback.
+Includes a local test panel for development without Discord.
 """
 
 import dash
@@ -25,31 +26,41 @@ dash.register_page(
     name="Gen Gallery",
 )
 
-# Conditionally include DashSocketIO for real-time push
-_sio_layout_extra = []
-if has_socketio_packages():
+# Transport-specific layout components
+_has_sio = has_socketio_packages()
+
+# Both branches get a cursor store and poll interval; SIO also gets DashSocketIO.
+_transport_components = [
+    dcc.Store(id="gen-cursor", data=0),
+    dcc.Interval(id="gen-poll", interval=30_000 if _has_sio else 2000),
+]
+if _has_sio:
     from dash_socketio import DashSocketIO
     from dash_widgetbot._constants import SIO_NAMESPACE_GEN, SIO_EVENT_GEN_RESULT, SIO_EVENT_GEN_PROGRESS
-    _sio_layout_extra = [
-        DashSocketIO(
-            id="_widgetbot-gen-sio",
-            eventNames=[SIO_EVENT_GEN_RESULT, SIO_EVENT_GEN_PROGRESS],
-            url=SIO_NAMESPACE_GEN,
-        )
-    ]
+    # Single component — each event updates a distinct prop (data-gen_result,
+    # data-gen_progress) so no React batching conflict.
+    _transport_components.insert(0, DashSocketIO(
+        id="_widgetbot-gen-sio",
+        eventNames=[SIO_EVENT_GEN_RESULT, SIO_EVENT_GEN_PROGRESS],
+        url=SIO_NAMESPACE_GEN,
+    ))
 
 layout = dmc.Container(
     [
-        dcc.Store(id="gen-cursor", data=0),
-        dcc.Interval(id="gen-poll", interval=2000),
-        *_sio_layout_extra,
+        *_transport_components,
 
         dmc.Space(h="xl"),
         dmc.Group(
             [
                 dmc.Title("Gen Gallery", order=2),
                 dmc.Badge(id="gen-count-badge", children="0 entries", variant="light", size="lg"),
-                dmc.Badge(id="gen-poll-status", children="polling", color="teal", variant="dot", size="sm"),
+                dmc.Badge(
+                    id="gen-poll-status",
+                    children="real-time" if _has_sio else "polling",
+                    color="indigo" if _has_sio else "teal",
+                    variant="dot",
+                    size="sm",
+                ),
             ],
             gap="md",
             mb="md",
@@ -115,6 +126,115 @@ layout = dmc.Container(
 # Callbacks
 # ---------------------------------------------------------------------------
 
+if _has_sio:
+    # ── Socket.IO real-time callbacks ──────────────────────────────────────
+    # DashSocketIO sets props["data-<eventName>"] = payload for each event.
+
+    @callback(
+        Output("gen-feed", "children", allow_duplicate=True),
+        Output("gen-count-badge", "children", allow_duplicate=True),
+        Input("_widgetbot-gen-sio", "data-gen_result"),
+        State("gen-feed", "children"),
+        prevent_initial_call=True,
+    )
+    def _on_gen_result_sio(payload, current):
+        """Prepend a card instantly when gen_store emits via Socket.IO."""
+        if not payload:
+            return no_update, no_update
+
+        from dash_widgetbot.gen_schemas import GenResponse
+        resp = None
+        if payload.get("response"):
+            try:
+                resp = GenResponse(**payload["response"])
+            except Exception:
+                pass
+
+        entry = GenEntry(
+            id=payload.get("id", ""),
+            prompt=payload.get("prompt", ""),
+            discord_user=payload.get("discord_user", ""),
+            timestamp=payload.get("timestamp", 0) or 0,
+            error=payload.get("error"),
+            response=resp,
+        )
+        card = render_gen_card(entry)
+        total = gen_store.count()
+        return [card] + (current or []), f"{total} entries"
+
+    @callback(
+        Output("gen-progress-container", "children"),
+        Input("_widgetbot-gen-sio", "data-gen_progress"),
+        State("gen-progress-container", "children"),
+        prevent_initial_call=True,
+    )
+    def _on_gen_progress_sio(payload, current):
+        """Show/update animated progress cards during AI generation."""
+        if not payload:
+            return no_update
+
+        task_id = payload.get("task_id", "")
+        phase = payload.get("phase", "")
+        percent = payload.get("percent", 0)
+        detail = payload.get("detail", "")
+
+        if not task_id:
+            return no_update
+
+        # Remove card on complete or error
+        if phase in ("complete", "error"):
+            cards = current or []
+            return [c for c in cards if not _is_progress_card(c, task_id)]
+
+        # Build/update progress card
+        from dash_widgetbot.progress import _PHASE_LABELS
+        label = _PHASE_LABELS.get(phase, phase)
+        detail_text = f" ({detail})" if detail else ""
+
+        card = dmc.Card(
+            [
+                dmc.Group(
+                    [
+                        dmc.Loader(size="xs", type="dots"),
+                        dmc.Text(f"{label}{detail_text}", size="sm", fw=500),
+                        dmc.Badge(phase.replace("_", " "), variant="light", color="indigo", size="sm"),
+                    ],
+                    gap="sm",
+                ),
+                dmc.Space(h="xs"),
+                dmc.Progress(
+                    value=percent,
+                    animated=True,
+                    color="indigo",
+                    size="lg",
+                ),
+            ],
+            withBorder=True,
+            shadow="sm",
+            p="md",
+            mb="md",
+            id={"type": "gen-progress-card", "task_id": task_id},
+            style={"borderLeft": "4px solid var(--mantine-color-indigo-6)"},
+        )
+
+        # Replace existing card for same task_id or prepend new one
+        cards = current or []
+        updated = False
+        new_cards = []
+        for c in cards:
+            if _is_progress_card(c, task_id):
+                new_cards.append(card)
+                updated = True
+            else:
+                new_cards.append(c)
+        if not updated:
+            new_cards.insert(0, card)
+        return new_cards
+
+
+# ── Poll callback (always registered) ────────────────────────────────────
+# SIO mode: 30s safety net. Non-SIO mode: 2s primary delivery.
+
 @callback(
     Output("gen-feed", "children"),
     Output("gen-cursor", "data"),
@@ -133,134 +253,9 @@ def poll_gen_store(_n, cursor, existing_children):
     if not new_entries:
         return no_update, no_update, f"{total} entries"
 
-    # Render new cards (newest first)
     new_cards = [render_gen_card(entry) for entry in reversed(new_entries)]
-
-    # Prepend to existing children
     current = existing_children or []
-    updated = new_cards + current
-
-    return updated, total, f"{total} entries"
-
-
-# Socket.IO real-time callback (additive — only registered when packages present)
-if has_socketio_packages():
-    @callback(
-        Output("gen-feed", "children", allow_duplicate=True),
-        Input("_widgetbot-gen-sio", "data"),
-        State("gen-feed", "children"),
-        prevent_initial_call=True,
-    )
-    def _on_gen_result_sio(data, current):
-        """Prepend a card instantly when gen_store emits via Socket.IO."""
-        if not data or data.get("event") != "gen_result":
-            return no_update
-        entry_data = data.get("data", {})
-
-        # Reconstruct GenEntry from socket payload (image_bytes omitted;
-        # use /api/gen/<id>/image URL if the rendered card needs the image)
-        from dash_widgetbot.gen_schemas import GenResponse
-        resp = None
-        if entry_data.get("response"):
-            try:
-                resp = GenResponse(**entry_data["response"])
-            except Exception:
-                pass
-
-        entry = GenEntry(
-            id=entry_data.get("id", ""),
-            prompt=entry_data.get("prompt", ""),
-            discord_user=entry_data.get("discord_user", ""),
-            timestamp=entry_data.get("timestamp", 0) or 0,
-            error=entry_data.get("error"),
-            response=resp,
-        )
-        card = render_gen_card(entry)
-        return [card] + (current or [])
-
-    @callback(
-        Output("gen-progress-container", "children"),
-        Input("_widgetbot-gen-sio", "data"),
-        State("gen-progress-container", "children"),
-        prevent_initial_call=True,
-    )
-    def _on_gen_progress_sio(data, current):
-        """Show/update animated progress cards during AI generation."""
-        if not data:
-            return no_update
-
-        event_name = data.get("event", "")
-        event_data = data.get("data", {})
-
-        # Handle gen_progress events
-        if event_name == "gen_progress":
-            task_id = event_data.get("task_id", "")
-            phase = event_data.get("phase", "")
-            percent = event_data.get("percent", 0)
-            detail = event_data.get("detail", "")
-
-            if not task_id:
-                return no_update
-
-            # Remove card on complete or error
-            if phase in ("complete", "error"):
-                cards = current or []
-                return [c for c in cards if not _is_progress_card(c, task_id)]
-
-            # Build/update progress card
-            from dash_widgetbot.progress import _PHASE_LABELS
-            label = _PHASE_LABELS.get(phase, phase)
-            detail_text = f" ({detail})" if detail else ""
-
-            card = dmc.Card(
-                [
-                    dmc.Group(
-                        [
-                            dmc.Loader(size="xs", type="dots"),
-                            dmc.Text(f"{label}{detail_text}", size="sm", fw=500),
-                            dmc.Badge(phase.replace("_", " "), variant="light", color="indigo", size="sm"),
-                        ],
-                        gap="sm",
-                    ),
-                    dmc.Space(h="xs"),
-                    dmc.Progress(
-                        value=percent,
-                        animated=True,
-                        color="indigo",
-                        size="lg",
-                    ),
-                ],
-                withBorder=True,
-                shadow="sm",
-                p="md",
-                mb="md",
-                id={"type": "gen-progress-card", "task_id": task_id},
-                style={"borderLeft": "4px solid var(--mantine-color-indigo-6)"},
-            )
-
-            # Replace existing card for same task_id or prepend new one
-            cards = current or []
-            updated = False
-            new_cards = []
-            for c in cards:
-                if _is_progress_card(c, task_id):
-                    new_cards.append(card)
-                    updated = True
-                else:
-                    new_cards.append(c)
-            if not updated:
-                new_cards.insert(0, card)
-            return new_cards
-
-        # Handle gen_result — clear any progress card for that task
-        if event_name == "gen_result":
-            cards = current or []
-            # gen_result doesn't carry task_id, so clear all progress cards
-            remaining = [c for c in cards if not _is_any_progress_card(c)]
-            if remaining != cards:
-                return remaining
-
-        return no_update
+    return new_cards + current, total, f"{total} entries"
 
 
 def _is_progress_card(component, task_id):
