@@ -145,6 +145,31 @@ def _render_callout(resp: GenResponse) -> list:
     ]
 
 
+def _render_attachments(entry: GenEntry) -> list:
+    """Render input file attachment previews (images as thumbnails, others as badges)."""
+    if not entry.attachment_files:
+        return []
+    children = []
+    for i, att in enumerate(entry.attachment_files):
+        if att["mime_type"].startswith("image/"):
+            children.append(
+                dmc.Image(
+                    src=f"/api/gen/{entry.id}/attachment/{i}",
+                    h=120,
+                    radius="sm",
+                    fit="contain",
+                )
+            )
+        else:
+            children.append(
+                dmc.Badge(att["filename"], variant="outline", size="sm")
+            )
+    return [
+        dmc.Text("Attached files", size="xs", fw=500, c="dimmed"),
+        dmc.Group(children, gap="xs"),
+    ]
+
+
 def render_gen_card(entry: GenEntry) -> dmc.Paper:
     """Render a GenEntry as a styled DMC Paper card.
 
@@ -220,27 +245,33 @@ def render_gen_card(entry: GenEntry) -> dmc.Paper:
         content_children = [dmc.Text(f"Unknown format: {resp.format}", c="dimmed")]
 
     # Build card
-    card_children = [
-        dmc.Group(
-            [
-                dmc.Badge(
-                    resp.format.replace("_", " "),
-                    color=format_colors.get(resp.format, "gray"),
-                    variant="light",
-                    size="sm",
-                ),
-                dmc.Text(
-                    datetime.fromtimestamp(entry.timestamp).strftime("%H:%M:%S"),
-                    size="xs",
-                    c="dimmed",
-                ),
-                dmc.Badge(entry.discord_user or "local", variant="dot", size="sm"),
-            ],
-            gap="xs",
+    header_badges = [
+        dmc.Badge(
+            resp.format.replace("_", " "),
+            color=format_colors.get(resp.format, "gray"),
+            variant="light",
+            size="sm",
         ),
+        dmc.Text(
+            datetime.fromtimestamp(entry.timestamp).strftime("%H:%M:%S"),
+            size="xs",
+            c="dimmed",
+        ),
+        dmc.Badge(entry.discord_user or "local", variant="dot", size="sm"),
+    ]
+    if entry.attachment_files:
+        n = len(entry.attachment_files)
+        label = "1 file attached" if n == 1 else f"{n} files attached"
+        header_badges.append(dmc.Badge(label, color="violet", variant="light", size="sm"))
+
+    attachment_section = _render_attachments(entry)
+
+    card_children = [
+        dmc.Group(header_badges, gap="xs"),
         dmc.Text(resp.title, fw=700, size="lg"),
         dmc.Text(entry.prompt, size="sm", c="dimmed", fs="italic"),
         dmc.Divider(),
+        *attachment_section,
         *content_children,
     ]
 

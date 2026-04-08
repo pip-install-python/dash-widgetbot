@@ -223,7 +223,7 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
     def _handle_status(interaction):
         """Handle /status -- returns app info."""
         return (
-            "**dash-widgetbot** v0.1.0\n"
+            "**dash-widgetbot** v0.4.1\n"
             f"Server: `{SERVER}`\n"
             f"Channel: `{CHANNEL}`\n"
             "Pages: Home, Commands, Events, Styling, Widget, "
@@ -386,7 +386,7 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         from dash_widgetbot.gen_responder import generate_gen_response
         from dash_widgetbot.gen_store import gen_store, GenEntry
         from dash_widgetbot.ai_image import generate_image
-        from dash_widgetbot.interactions import _detect_ngrok_url
+        from dash_widgetbot.interactions import _detect_ngrok_url, _extract_attachments
         from dash_widgetbot.ai_responder import reset_client as _reset_client
         import time as _time
 
@@ -397,13 +397,15 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         if not prompt:
             return "Please provide a prompt."
 
+        attachments = _extract_attachments(interaction) or None
+
         member = interaction.get("member", {})
         discord_user = member.get("user", {}).get("username", "unknown")
 
         if tracker:
             tracker.update("analyzing")
         on_progress = tracker.stream_callback() if tracker else None
-        result = generate_gen_response(prompt, on_progress=on_progress)
+        result = generate_gen_response(prompt, attachments=attachments, on_progress=on_progress)
         # Retry once on transient httpx / connection errors (stale HTTP/2 pool)
         if result["error"] and any(
             s in result["error"].lower()
@@ -412,7 +414,7 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
             print(f"[dash-widgetbot] /ai: transient error '{result['error'][:80]}', resetting client and retrying...")
             _reset_client()
             _time.sleep(1)
-            result = generate_gen_response(prompt, on_progress=on_progress)
+            result = generate_gen_response(prompt, attachments=attachments, on_progress=on_progress)
 
         if tracker:
             tracker.update("parsing")
@@ -449,6 +451,7 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
             image_bytes=image_bytes,
             image_mime=image_mime,
             discord_user=discord_user,
+            attachment_files=attachments,
         ))
 
         # Build Dash URL
@@ -520,7 +523,10 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
                 "name": "ai",
                 "description": "Generate AI content and post it to the channel",
                 "type": 1,
-                "options": [{"name": "prompt", "description": "What to generate (article, code, image, table, or tip)", "type": 3, "required": True}],
+                "options": [
+                    {"name": "prompt", "description": "What to generate (article, code, image, table, or tip)", "type": 3, "required": True},
+                    {"name": "file", "description": "Optional file attachment (image, code, text)", "type": 11, "required": False},
+                ],
             },
         ]
         try:
@@ -850,10 +856,42 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
         if not handler:
             return _no_update, _no_update
 
+        # Extract file attachment from Crate sentMessage event
+        crate_attachments = []
+        file_data_b64 = event_data.get("file_data")
+        file_name = event_data.get("file_name")
+        if file_data_b64 and file_name:
+            import base64, mimetypes
+            try:
+                raw_b64 = file_data_b64
+                detected_mime = None
+
+                # Handle data URLs: "data:image/png;base64,iVBOR..."
+                if raw_b64.startswith("data:"):
+                    header, _, raw_b64 = raw_b64.partition(",")
+                    if ";base64" in header:
+                        detected_mime = header.split(";")[0].replace("data:", "")
+
+                # Fix missing padding
+                padding = len(raw_b64) % 4
+                if padding:
+                    raw_b64 += "=" * (4 - padding)
+
+                file_bytes = base64.b64decode(raw_b64)
+                mime_type = detected_mime or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+                crate_attachments.append({
+                    "data": file_bytes,
+                    "mime_type": mime_type,
+                    "filename": file_name,
+                })
+            except Exception as exc:
+                print(f"[dash-widgetbot] Crate file decode error: {exc}")
+
         fake_interaction = {
             "channel_id": channel_id,
             "data": {"name": cmd_name, "options": options},
             "member": {"user": {"username": "crate-user"}},
+            "_attachments": crate_attachments or None,
         }
 
         # Commands that call _post_channel_message themselves don't need the
@@ -881,6 +919,12 @@ if os.getenv("DISCORD_PUBLIC_KEY"):
                 sinks.append(CrateNotifySink())
                 tracker = ProgressTracker(sinks=sinks)
                 fake_interaction["_progress_tracker"] = tracker
+
+            # NOTE: Thread redirect is intentionally skipped for Crate-bridge
+            # commands. The Crate widget can't navigate to private threads
+            # reliably, and Crate users expect to see responses directly in the
+            # widget. Thread isolation is handled for Discord native slash
+            # commands in interactions.py:_handle_command().
 
             try:
                 print(f"[dash-widgetbot] Crate slash /{cmd_name}: '{rest[:80]}'")
@@ -922,6 +966,18 @@ def gen_image_route(entry_id):
     for entry in _gen_store.get_all():
         if entry.id == entry_id and entry.image_bytes:
             return Response(entry.image_bytes, content_type=entry.image_mime or "image/png")
+    return Response("Not found", status=404)
+
+
+@_hooks.route("api/gen/<entry_id>/attachment/<int:index>", methods=("GET",))
+def gen_attachment_route(entry_id, index):
+    from flask import Response
+    from dash_widgetbot.gen_store import gen_store as _gen_store
+    for entry in _gen_store.get_all():
+        if entry.id == entry_id and entry.attachment_files:
+            if 0 <= index < len(entry.attachment_files):
+                att = entry.attachment_files[index]
+                return Response(att["data"], content_type=att["mime_type"])
     return Response("Not found", status=404)
 
 
@@ -1011,6 +1067,6 @@ app.layout = dmc.MantineProvider(
 
 if __name__ == "__main__":
     if _socketio:
-        _socketio.run(app.server, debug=True, port=8150)
+        _socketio.run(app.server, debug=True, port=8150, allow_unsafe_werkzeug=True)
     else:
         app.run(debug=True, port=8150)

@@ -105,13 +105,18 @@ You have access to Google Search. Use it for factual, current, or specific infor
 """
 
 
-def generate_gen_response(prompt: str, *, on_progress=None) -> dict:
+def generate_gen_response(prompt: str, *, attachments=None, on_progress=None) -> dict:
     """Generate a structured /gen response.
 
     Parameters
     ----------
     prompt : str
         The user's generation prompt.
+    attachments : list[dict], optional
+        File attachments from ``_extract_attachments()``.  Each dict has
+        ``{"data": bytes, "mime_type": str, "filename": str}``.
+        Images are sent as inline_data parts; text/code files are inlined
+        in the prompt text.
     on_progress : callable, optional
         ``(chunk_bytes, total_bytes)`` callback for streaming progress.
         When provided, uses ``generate_content_stream()`` instead of
@@ -138,7 +143,45 @@ def generate_gen_response(prompt: str, *, on_progress=None) -> dict:
         response_mime_type="application/json",
         tools=tools,
     )
-    contents = [f"{GEN_SYSTEM_PROMPT}\n\nUser prompt: {prompt}"]
+
+    # Build contents — multimodal when attachments are present
+    prompt_text = f"{GEN_SYSTEM_PROMPT}\n\nUser prompt: {prompt}"
+
+    _TEXT_MIMES = frozenset({
+        "text/plain", "text/markdown", "text/csv", "text/html", "text/css",
+        "text/javascript", "text/x-python",
+        "application/json", "application/xml", "application/yaml",
+    })
+
+    if attachments:
+        parts = []
+
+        # Append text-file contents inline in the prompt text
+        for att in attachments:
+            if att["mime_type"].startswith("text/") or att["mime_type"] in _TEXT_MIMES:
+                try:
+                    text_content = att["data"].decode("utf-8")
+                    prompt_text += (
+                        f"\n\n--- Attached file: {att['filename']} ---\n"
+                        f"{text_content}\n"
+                        f"--- End of {att['filename']} ---"
+                    )
+                except UnicodeDecodeError:
+                    pass  # Skip binary files that aren't actually text
+
+        parts.append(types.Part(text=prompt_text))
+
+        # Append image data as inline_data parts
+        for att in attachments:
+            if att["mime_type"].startswith("image/"):
+                parts.append(types.Part(inline_data=types.Blob(
+                    mime_type=att["mime_type"],
+                    data=att["data"],
+                )))
+
+        contents = [types.Content(parts=parts)]
+    else:
+        contents = [prompt_text]
 
     try:
         raw_text = ""

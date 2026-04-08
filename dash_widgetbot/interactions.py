@@ -150,6 +150,125 @@ def _edit_channel_message(channel_id: str, message_id: str, content: str) -> boo
 
 _AI_COMMANDS = frozenset({"ai", "gen", "ask"})
 
+# ---------------------------------------------------------------------------
+# Attachment extraction helpers
+# ---------------------------------------------------------------------------
+
+_MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024  # 10 MB
+
+_IMAGE_MIMES = frozenset({
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+})
+
+_TEXT_MIMES = frozenset({
+    "text/plain", "text/markdown", "text/csv", "text/html", "text/css",
+    "text/javascript", "text/x-python",
+    "application/json", "application/xml", "application/yaml",
+})
+
+_CODE_EXTENSIONS = frozenset({
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".rs", ".go", ".java",
+    ".c", ".cpp", ".h", ".rb", ".php", ".sh", ".toml", ".yaml", ".yml",
+    ".md", ".txt", ".csv", ".json", ".xml", ".html", ".css",
+})
+
+
+def _fetch_discord_attachment(attachment_info):
+    """Download a file from Discord CDN and return its bytes + metadata.
+
+    Parameters
+    ----------
+    attachment_info : dict
+        Resolved attachment dict from ``interaction["data"]["resolved"]["attachments"]``.
+        Expected keys: ``url``, ``filename``, ``content_type``, ``size``.
+
+    Returns
+    -------
+    dict or None
+        ``{"data": bytes, "mime_type": str, "filename": str}`` on success.
+    """
+    import mimetypes
+
+    url = attachment_info.get("url") or attachment_info.get("proxy_url", "")
+    filename = attachment_info.get("filename", "unknown")
+    size = attachment_info.get("size", 0)
+
+    if not url:
+        print(f"[dash-widgetbot] Attachment '{filename}': no URL")
+        return None
+
+    if size and size > _MAX_ATTACHMENT_SIZE:
+        print(f"[dash-widgetbot] Attachment '{filename}' too large ({size} bytes), skipping")
+        return None
+
+    # Determine MIME type
+    mime_type = attachment_info.get("content_type", "")
+    if not mime_type:
+        mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+    # Check if MIME type is supported
+    is_supported = (
+        mime_type in _IMAGE_MIMES
+        or mime_type in _TEXT_MIMES
+        or mime_type.startswith("text/")
+        or any(filename.lower().endswith(ext) for ext in _CODE_EXTENSIONS)
+    )
+    if not is_supported:
+        print(f"[dash-widgetbot] Attachment '{filename}' unsupported MIME '{mime_type}', skipping")
+        return None
+
+    try:
+        resp = _discord_request("get", url, max_retries=1, timeout=30)
+        if not resp.ok:
+            print(f"[dash-widgetbot] Attachment download failed ({resp.status_code}): {filename}")
+            return None
+        data = resp.content
+        if len(data) > _MAX_ATTACHMENT_SIZE:
+            print(f"[dash-widgetbot] Attachment '{filename}' body too large ({len(data)} bytes), skipping")
+            return None
+        print(f"[dash-widgetbot] Attachment downloaded: {filename} ({len(data)} bytes, {mime_type})")
+        return {"data": data, "mime_type": mime_type, "filename": filename}
+    except Exception as exc:
+        print(f"[dash-widgetbot] Attachment download exception for '{filename}': {exc}")
+        return None
+
+
+def _extract_attachments(interaction):
+    """Extract file attachments from an interaction (both paths).
+
+    Checks ``interaction["_attachments"]`` first (Crate-bridge injection),
+    then falls back to Discord resolved attachments for type-11 options.
+
+    Returns
+    -------
+    list[dict]
+        Each dict has ``{"data": bytes, "mime_type": str, "filename": str}``.
+    """
+    # 1. Crate-bridge path: pre-decoded attachments
+    injected = interaction.get("_attachments")
+    if injected:
+        return [a for a in injected if a.get("data")]
+
+    # 2. Discord native path: resolve type-11 ATTACHMENT options
+    data = interaction.get("data", {})
+    options = data.get("options", [])
+    resolved = data.get("resolved", {}).get("attachments", {})
+
+    if not resolved:
+        return []
+
+    attachments = []
+    for opt in options:
+        if opt.get("type") == 11:
+            att_id = str(opt.get("value", ""))
+            att_info = resolved.get(att_id)
+            if att_info:
+                result = _fetch_discord_attachment(att_info)
+                if result:
+                    attachments.append(result)
+
+    return attachments
+
 
 def sync_discord_endpoint(*, base_url=None, bot_token=None, application_id=None):
     """Detect the current public URL and update Discord's Interactions Endpoint.
@@ -496,6 +615,21 @@ def _handle_command(interaction, application_id):
         _send_followup(application_id, token, f"Unknown command: `/{name}`")
         return
 
+    # ── Private thread redirect (opt-in via AI_THREAD_PARENT_CHANNEL) ──
+    thread_id = None
+    parent_channel = os.getenv("AI_THREAD_PARENT_CHANNEL")
+    if parent_channel and name in _AI_COMMANDS:
+        user = interaction.get("member", {}).get("user", {})
+        user_id = user.get("id", "")
+        username = user.get("username", "unknown")
+        if user_id:
+            from .threads import thread_manager
+            thread_id = thread_manager.get_or_create(parent_channel, user_id, username)
+            if thread_id:
+                interaction["_original_channel_id"] = interaction.get("channel_id", "")
+                interaction["_thread_channel_id"] = thread_id
+                interaction["channel_id"] = thread_id  # redirect all posting
+
     # Inject progress tracker for AI commands
     tracker = None
     if name in _AI_COMMANDS:
@@ -524,6 +658,9 @@ def _handle_command(interaction, application_id):
             if payload is not None:
                 _send_followup_with_files(application_id, token, payload, files=files)
             return
+        # Append thread link to ephemeral follow-up
+        if thread_id and isinstance(result, str):
+            result = f"{result}\n\n\U0001f4ac Response posted in <#{thread_id}>"
         _send_followup(application_id, token, result)
     except Exception as exc:
         import traceback

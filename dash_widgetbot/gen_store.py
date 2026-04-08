@@ -51,6 +51,7 @@ class GenEntry:
     discord_user: str = ""
     timestamp: float = field(default_factory=time.time)
     error: str | None = None
+    attachment_files: list[dict] | None = None  # [{data: bytes, mime_type: str, filename: str}]
 
 
 class GenStore:
@@ -79,6 +80,10 @@ class GenStore:
                 "has_image": entry.image_bytes is not None,
                 "image_mime": entry.image_mime,
                 "response": entry.response.model_dump() if entry.response else None,
+                "attachments": [
+                    {"filename": a["filename"], "mime_type": a["mime_type"], "size": len(a.get("data", b""))}
+                    for a in (entry.attachment_files or [])
+                ],
             }
             get_socketio().emit(SIO_EVENT_GEN_RESULT, payload, namespace=SIO_NAMESPACE_GEN)
 

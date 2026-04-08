@@ -169,6 +169,9 @@ function(config) {
             type: 'sentMessage', content: data.content || '',
             channel_id: data.channel ? (data.channel.id || '') : '',
             channel_name: data.channel ? (data.channel.name || '') : '',
+            file_data: data.fileData || null,
+            file_name: data.fileName || null,
+            file_alt: data.fileAlt || null,
             timestamp: Date.now(), _ts: Date.now()
         };
         window.dash_clientside.set_props(sid.event, {data: payload});

@@ -7,7 +7,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.4.1-pre] — 2026-02-24
+## [0.4.1] — 2026-04-02
 
 ### Fixed
 
@@ -62,6 +62,33 @@ This project follows [Semantic Versioning](https://semver.org/).
 - **Merged two `DashSocketIO` components into one** — each event updates a distinct prop
   (`data-gen_result`, `data-gen_progress`), so no React batching conflict is possible.
   The previous two-component split was unnecessary.
+
+### Added
+
+#### Per-User Private AI Threads (`threads.py`)
+- **`threads.py`** (new module) — `ThreadManager` singleton creates and caches Discord private
+  threads (type 12, `invitable=false`, 7-day auto-archive) per user so each Discord member
+  gets an isolated AI chat thread rather than a noisy shared channel
+- Thread naming format: `AI · {username}`; cache is warmed on first access by scanning
+  archived private threads to survive app restarts
+- Opt-in via `AI_THREAD_PARENT_CHANNEL` env var — set to any text channel ID; all three
+  AI commands (`/ai`, `/ask`, `/gen`) automatically redirect their `channel_id` to the
+  user's private thread when set
+- **Discord native path only** — Crate-bridge responses go to the main channel (Crate
+  cannot navigate to private threads; WidgetBot SIO client is unavailable at Crate init time)
+- Bot permissions required: `CREATE_PRIVATE_THREADS` (1<<36),
+  `SEND_MESSAGES_IN_THREADS` (1<<38), `MANAGE_THREADS` (1<<34)
+- `thread_manager.invalidate(user_id)` available for explicit cache eviction
+- New env var `AI_THREAD_PARENT_CHANNEL` documented in `.env.example`
+
+#### Expanded `.env.example`
+- Added all previously undocumented env vars: `DISCORD_GUILD_ID`, `INTERACTIONS_URL`,
+  `GEMINI_MODEL`, `GEMINI_IMAGE_API_KEY`, `GEMINI_IMAGE_MODEL`, `GEMINI_SEARCH_GROUNDING`
+
+### Fixed
+
+#### Version Consistency
+- **`app.py` `_handle_status()`** — corrected hardcoded version string from `v0.1.0` to `v0.4.1`
 
 ### Changed
 
@@ -359,7 +386,7 @@ Initial release.
 
 ---
 
-[0.4.1-pre]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.4.1-pre
+[0.4.1]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.4.1
 [0.4.0]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.4.0
 [0.3.0]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.3.0
 [0.2.0]: https://github.com/pip-install-python/dash-widgetbot/releases/tag/v0.2.0

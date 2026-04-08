@@ -1,6 +1,6 @@
 """dash-widgetbot -- Dash hooks plugin for WidgetBot Discord embeds."""
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 from .crate import add_discord_crate
 from .widget import add_discord_widget, discord_widget_container

@@ -150,6 +150,15 @@ if _has_sio:
             except Exception:
                 pass
 
+        # Reconstruct lightweight attachment metadata for rendering
+        att_payload = payload.get("attachments")
+        attachment_files = None
+        if att_payload:
+            attachment_files = [
+                {"filename": a["filename"], "mime_type": a["mime_type"], "data": b""}
+                for a in att_payload
+            ]
+
         entry = GenEntry(
             id=payload.get("id", ""),
             prompt=payload.get("prompt", ""),
@@ -157,6 +166,7 @@ if _has_sio:
             timestamp=payload.get("timestamp", 0) or 0,
             error=payload.get("error"),
             response=resp,
+            attachment_files=attachment_files,
         )
         card = render_gen_card(entry)
         total = gen_store.count()
